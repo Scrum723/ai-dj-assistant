@@ -353,6 +353,8 @@ class DjModeRequest(BaseModel):
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DASH_DIST = os.path.join(ROOT_DIR, "frontend-dashboard", "dist")
 OVER_DIST = os.path.join(ROOT_DIR, "frontend-overlay", "dist")
+if not os.path.isdir(OVER_DIST):
+    OVER_DIST = os.path.join(ROOT_DIR, "backend", "frontend-overlay", "dist")
 
 
 @app.get("/room")

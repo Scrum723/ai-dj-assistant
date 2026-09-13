@@ -6,12 +6,15 @@ RUN apt-get update \
 COPY requirements-cloud.txt .
 RUN pip install --no-cache-dir -r requirements-cloud.txt
 COPY frontend-dashboard ./frontend-dashboard
-COPY frontend-overlay ./frontend-overlay
+COPY backend ./backend
 RUN npm install --prefix frontend-dashboard \
   && npm run build --prefix frontend-dashboard \
-  && npm install --prefix frontend-overlay \
-  && npm run build --prefix frontend-overlay
-COPY backend ./backend
+  && if [ -d backend/frontend-overlay ]; then \
+       npm install --prefix backend/frontend-overlay \
+       && npm run build --prefix backend/frontend-overlay \
+       && mkdir -p frontend-overlay \
+       && cp -R backend/frontend-overlay/dist frontend-overlay/dist; \
+     fi
 ENV PORT=8080
 EXPOSE 8080
 CMD ["python", "backend/main.py"]
