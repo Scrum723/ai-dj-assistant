@@ -1,12 +1,19 @@
-# AI DJ Assistant
+# DJ Bot Botty
 
-This is a **standalone Mac app** that talks to rekordbox over a virtual MIDI port. It does **not** install into Pioneer DJ / rekordbox as a plugin. Dropping it in `Music/PioneerDJ` does not load it into Pioneer software.
+The full booth: MIDI, decks, rekordbox virtual port, room, overlay, and viewer passes.
 
-It has three pieces:
+**Halo** is the LLM buddy in chat — not the product name.
+
+This is a **standalone Mac app** that talks to rekordbox over a virtual MIDI port. It does **not** install into Pioneer DJ / rekordbox as a plugin.
+
+Live web: `https://djbotbotty.com` (Railway). MIDI stays on the Mac.
+
+It has four pieces:
 
 1. **Brain** (`backend`) — FastAPI + virtual MIDI port `AI_DJ_Virtual_Port`
 2. **Dashboard** — DJ controls, library, fan requests (`http://127.0.0.1:5173`)
 3. **Overlay** — OBS browser source avatar (`http://127.0.0.1:5174`)
+4. **Booth pass** — signup/login so livestream viewers keep a DJ Bot Botty profile (Halo is the chat LLM)
 
 ## Desktop app (private, one process)
 

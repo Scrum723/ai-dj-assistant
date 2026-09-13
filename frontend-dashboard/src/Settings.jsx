@@ -46,7 +46,7 @@ export default function Settings({ state, refresh }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
       <section style={card}>
-        <h2 style={h}>Halo</h2>
+        <h2 style={h}>Halo (LLM buddy)</h2>
         <label style={lab}>Name
           <input value={halo.name} onChange={(e) => setHalo({ name: e.target.value })} style={inp} />
         </label>

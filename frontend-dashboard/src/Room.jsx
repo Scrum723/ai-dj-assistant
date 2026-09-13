@@ -52,8 +52,8 @@ export default function Room({ state, refresh }) {
   if (!joined) {
     return (
       <div style={{ maxWidth: 480, margin: '40px auto', ...card, textAlign: 'center' }}>
-        <h1 style={{ color: '#a78bfa' }}>Walk into the room</h1>
-        <p style={{ color: '#9ca3af' }}>Pick a name. Chat, request, ask {haloName} a question, or say hey to someone already here.</p>
+        <h1 style={{ color: '#a78bfa' }}>DJ Bot Botty room</h1>
+        <p style={{ color: '#9ca3af' }}>Pick a name. Chat, request, ask {haloName} (the LLM buddy) a question, or say hey to someone already here.</p>
         <RoomUrls urls={urls} copy={copy} />
         <input value={nick} onChange={(e) => setNick(e.target.value)} placeholder="Your name" style={inp} onKeyDown={(e) => e.key === 'Enter' && nick.trim() && setJoined(true)} />
         <button onClick={() => nick.trim() && setJoined(true)} style={btn}>Join</button>

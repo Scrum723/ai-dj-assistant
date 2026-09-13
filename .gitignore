@@ -7,5 +7,8 @@ dist/
 *.log
 .env
 logs/
+backend/users.db
+backend/halo_training.jsonl
+backend/sentinel_incidents.jsonl
 Halo.app/
 voice_cache/

@@ -12,10 +12,13 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from auth import router as auth_router
 from cohost import CohostAgent
 from dj_controller import DJController, MIDI_MAP
+from sentinel import router as sentinel_router
 from settings import load as load_settings
 from settings import public_settings, save as save_settings
+from trainer import idle_trainer
 from voice import MAC_VOICES, resolve_voice_file, synthesize
 
 logging.basicConfig(level=logging.INFO)
@@ -281,26 +284,37 @@ async def lifespan(app: FastAPI):
     if cfg.get("youtube_id"):
         agent.set_youtube(cfg.get("youtube_id"))
     agent_task = asyncio.create_task(agent.run())
+    trainer_stop = asyncio.Event()
+    trainer_task = asyncio.create_task(idle_trainer(snapshot, trainer_stop))
     tracks = all_tracks()
     if tracks and not state["current_track"]:
         state["current_track"] = tracks[0]
-    logger.info("Halo co-host started.")
+    logger.info("DJ Bot Botty online. Halo LLM buddy started.")
     yield
+    trainer_stop.set()
     if agent:
         agent.stop()
-    for task in (agent_task, speech_task):
+    for task in (agent_task, speech_task, trainer_task):
         if task:
             task.cancel()
 
 
-app = FastAPI(title="AI DJ Assistant Brain", lifespan=lifespan)
+app = FastAPI(title="DJ Bot Botty", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+        "https://djbotbotty.com",
+        "https://www.djbotbotty.com",
+        "https://halo-dj-production.up.railway.app",
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth_router)
+app.include_router(sentinel_router)
 
 
 class CrossfadeRequest(BaseModel):
@@ -367,7 +381,8 @@ def read_root():
     if os.path.isdir(os.path.join(DASH_DIST, "assets")):
         return RedirectResponse("/booth/")
     return {
-        "status": "AI DJ Assistant is online.",
+        "status": "DJ Bot Botty is online.",
+        "product": "DJ Bot Botty",
         "cohost": (load_settings().get("halo") or {}).get("name") or "Halo",
         "midi_connected": dj.connected,
         "dashboard": "http://127.0.0.1:5173",

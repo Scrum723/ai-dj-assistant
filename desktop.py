@@ -37,7 +37,7 @@ def open_window(url: str):
     try:
         import webview
 
-        webview.create_window("Halo — AI DJ", url, width=1440, height=920)
+        webview.create_window("DJ Bot Botty", url, width=1440, height=920)
         webview.start()
         return True
     except Exception:

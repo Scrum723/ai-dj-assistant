@@ -25,7 +25,7 @@ export default function App() {
       setState(nextState);
       setError('');
     } catch (err) {
-      setError('Cannot reach the AI DJ backend on port 8000. Run start.py first.');
+      setError('Cannot reach DJ Bot Botty on port 8000. Run start.py first.');
     }
   }, []);
 
@@ -83,12 +83,12 @@ export default function App() {
       <nav style={{ display: 'flex', padding: '20px', backgroundColor: '#1e1e1e', borderBottom: '2px solid #7c3aed', justifyContent: 'space-between', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
           <Radio color="#7c3aed" size={32} />
-          <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 'bold', letterSpacing: '1px' }}>AI DJ ASSISTANT</h1>
+          <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 'bold', letterSpacing: '1px' }}>DJ BOT BOTTY</h1>
         </div>
         <StatusPills state={state} error={error} />
         <div style={{ display: 'flex', gap: '15px' }}>
           <button onClick={toggleDj} style={navBtnStyle(true, djMode ? '#f59e0b' : '#374151')}>
-            {djMode ? 'DJ MODE — Halo quiet' : 'Halo live'}
+            {djMode ? 'DJ MODE — Halo quiet' : 'Halo (LLM) live'}
           </button>
           <button onClick={() => openAllStreams(state?.settings)} style={navBtnStyle(true, '#ff0033')}>
             Open all streams
@@ -325,7 +325,7 @@ function CohostPanel({ state, refresh }) {
     <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 30 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
         <div style={{ ...cardStyle, borderLeft: '4px solid #db2777' }}>
-          <h2 style={headerStyle}><Bot size={20} /> Halo, the booth co-host</h2>
+          <h2 style={headerStyle}><Bot size={20} /> Halo — DJ Bot Botty’s LLM buddy</h2>
           <p style={{ color: '#d1d5db', lineHeight: 1.6, marginTop: 16 }}>
             Halo talks on her own: greets new people, answers questions, queues requests, and fills silence so the overlay is never stuck on one sentence. Open <strong>http://127.0.0.1:5174</strong> as an OBS Browser source (click the page once so the browser allows voice).
           </p>

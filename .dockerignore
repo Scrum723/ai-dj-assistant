@@ -11,6 +11,9 @@ __pycache__
 *.pyc
 .DS_Store
 voice_cache
+backend/users.db
+backend/halo_training.jsonl
+backend/sentinel_incidents.jsonl
 frontend-dashboard/node_modules
 frontend-overlay/node_modules
 backend/frontend-overlay/node_modules
