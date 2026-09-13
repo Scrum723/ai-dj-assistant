@@ -1,0 +1,16 @@
+.venv
+.agents
+.gemini
+.vscode
+Halo.app
+**/node_modules
+**/dist
+logs
+__pycache__
+.git
+*.pyc
+.DS_Store
+voice_cache
+frontend-dashboard/node_modules
+frontend-overlay/node_modules
+backend/frontend-overlay/node_modules
