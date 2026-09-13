@@ -23,7 +23,10 @@ def main():
     os.chdir(ROOT)
     if not VENV_PY.exists():
         run([sys.executable, "-m", "venv", str(ROOT / ".venv")])
-    run([str(VENV_PIP), "install", "-r", str(ROOT / "requirements.txt")])
+    req = ROOT / "requirements-local.txt"
+    if not req.exists():
+        req = ROOT / "requirements.txt"
+    run([str(VENV_PIP), "install", "-r", str(req)])
     npm = shutil.which("npm")
     if not npm:
         raise SystemExit("npm not found. Install Node.js, then re-run.")
