@@ -3,7 +3,8 @@ nixPkgs = ["nodejs_20", "python313"]
 
 [phases.install]
 cmds = [
-  "python -m pip install -r requirements-cloud.txt",
+  "python -m ensurepip --upgrade || true",
+  "pip install -r requirements-cloud.txt",
   "npm install --prefix frontend-dashboard",
   "npm install --prefix frontend-overlay",
 ]
