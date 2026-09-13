@@ -1,7 +1,10 @@
 import logging
 import time
 
-import mido
+try:
+    import mido
+except Exception:  # cloud hosts have no CoreMIDI / rtmidi
+    mido = None
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,10 @@ class DJController:
         return self.outport is not None
 
     def _initialize_midi(self):
+        if mido is None:
+            self.error = "MIDI disabled (no mido/rtmidi on this host)"
+            logger.warning(self.error)
+            return
         try:
             self.outport = mido.open_output(self.port_name, virtual=True)
             logger.info("Virtual MIDI port '%s' created (RtMidi/CoreMIDI).", self.port_name)
