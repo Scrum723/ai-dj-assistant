@@ -1,0 +1,16 @@
+{
+  "folders": [
+    {
+      "name": "Halo AI DJ",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/node_modules": true,
+      "**/__pycache__": true,
+      "frontend-dashboard/dist": true,
+      "frontend-overlay/dist": true
+    }
+  }
+}

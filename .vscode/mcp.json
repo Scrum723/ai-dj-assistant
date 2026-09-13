@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "ignition-mcp": {
+      "url": "http://localhost:3925/mcp"
+    }
+  }
+}

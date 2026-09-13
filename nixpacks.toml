@@ -1,0 +1,18 @@
+[phases.setup]
+nixPkgs = ["nodejs_20", "python313"]
+
+[phases.install]
+cmds = [
+  "python -m pip install -r requirements.txt",
+  "npm install --prefix frontend-dashboard",
+  "npm install --prefix frontend-overlay",
+]
+
+[phases.build]
+cmds = [
+  "npm run build --prefix frontend-dashboard",
+  "npm run build --prefix frontend-overlay",
+]
+
+[start]
+cmd = "python backend/main.py"

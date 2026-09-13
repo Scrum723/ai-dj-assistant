@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+logs/
+Halo.app/
+voice_cache/
