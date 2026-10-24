@@ -19,7 +19,52 @@ PLATFORMS = (
     "halo",
 )
 
-KINDS = ("chat", "super_chat", "gift", "follow", "system")
+KINDS = ("chat", "super_chat", "gift", "member", "follow", "system")
+
+SUPPORT_KINDS = frozenset({"super_chat", "gift", "member", "follow"})
+
+
+@dataclass
+class SupportInfo:
+    """Paid / membership / gift metadata. Unsupported fields stay null."""
+
+    amount: Optional[float] = None
+    currency: Optional[str] = None
+    tier: Optional[str] = None
+    count: Optional[int] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "amount": self.amount,
+            "currency": self.currency,
+            "tier": self.tier,
+            "count": self.count,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Optional[dict[str, Any]]) -> Optional["SupportInfo"]:
+        if not data or not isinstance(data, dict):
+            return None
+        amount = data.get("amount")
+        try:
+            amount_f = float(amount) if amount is not None else None
+        except (TypeError, ValueError):
+            amount_f = None
+        count = data.get("count")
+        try:
+            count_i = int(count) if count is not None else None
+        except (TypeError, ValueError):
+            count_i = None
+        currency = data.get("currency")
+        tier = data.get("tier")
+        if amount_f is None and currency is None and tier is None and count_i is None:
+            return None
+        return cls(
+            amount=amount_f,
+            currency=str(currency) if currency is not None else None,
+            tier=str(tier) if tier is not None else None,
+            count=count_i,
+        )
 
 
 @dataclass
@@ -66,6 +111,7 @@ class ChatMessage:
     kind: str = "chat"
     ts: float = field(default_factory=time.time)
     profile_id: Optional[int] = None
+    support: Optional[SupportInfo] = None
     raw: Optional[dict[str, Any]] = None
 
     def to_dict(self, *, include_raw: bool = True) -> dict[str, Any]:
@@ -81,6 +127,7 @@ class ChatMessage:
             ],
             "kind": self.kind,
             "ts": self.ts,
+            "support": self.support.to_dict() if self.support else None,
         }
         if include_raw and self.raw is not None:
             data["raw"] = self.raw
@@ -93,7 +140,7 @@ class ChatMessage:
     def to_legacy(self) -> dict[str, Any]:
         """Overlay / cohost chat line shape."""
         user = self.user if isinstance(self.user, ChatUser) else ChatUser()
-        return {
+        out = {
             "author": user.display_name or user.handle or "Fan",
             "message": self.text,
             "platform": self.platform,
@@ -101,6 +148,9 @@ class ChatMessage:
             "id": self.id,
             "kind": self.kind,
         }
+        if self.support:
+            out["support"] = self.support.to_dict()
+        return out
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ChatMessage":
@@ -131,6 +181,11 @@ class ChatMessage:
                         end=int(e.get("end") or 0),
                     )
                 )
+        support_raw = data.get("support")
+        if isinstance(support_raw, SupportInfo):
+            support = support_raw
+        else:
+            support = SupportInfo.from_dict(support_raw)
         return cls(
             id=str(data.get("id") or ""),
             platform=str(data.get("platform") or "room"),
@@ -141,6 +196,7 @@ class ChatMessage:
             kind=str(data.get("kind") or "chat"),
             ts=float(data.get("ts") or time.time()),
             profile_id=data.get("profile_id"),
+            support=support,
             raw=data.get("raw"),
         )
 

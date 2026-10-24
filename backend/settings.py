@@ -50,6 +50,14 @@ DEFAULTS = {
         "next_show": "",
         "last_set": "",
         "operator_handles": ["charles", "charlesclottin"],
+        "say_amounts": False,
+        "thanks": {
+            "youtube": "Thank you {name} on YouTube{amount_bit} — the booth feels that!",
+            "twitch": "Huge thanks {name} from Twitch{amount_bit} — appreciate the support!",
+            "kick": "Thanks {name}!",
+            "tiktok": "Thanks {name}!",
+            "default": "Thank you {name} for the support!",
+        },
         "capabilities": {
             "greet": True,
             "requests": True,

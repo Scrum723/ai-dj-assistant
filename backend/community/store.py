@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from community.schema import ChatMessage, ChatUser, Emote
+from community.schema import SUPPORT_KINDS, ChatMessage, ChatUser, Emote
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,31 @@ class CommunityStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS supporters (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    day TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    handle TEXT NOT NULL DEFAULT '',
+                    display_name TEXT NOT NULL DEFAULT '',
+                    profile_id TEXT,
+                    kind TEXT NOT NULL DEFAULT 'gift',
+                    amount REAL,
+                    currency TEXT,
+                    tier TEXT,
+                    count INTEGER,
+                    ts REAL NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_supporters_day ON supporters(day, ts DESC)"
+            )
+            # Optional support_json column on messages (best-effort migrate)
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(messages)").fetchall()}
+            if "support_json" not in cols:
+                conn.execute("ALTER TABLE messages ADD COLUMN support_json TEXT")
             conn.commit()
 
     def insert_message(self, msg: ChatMessage) -> None:
@@ -96,13 +121,14 @@ class CommunityStore:
             e.to_dict() if isinstance(e, Emote) else e for e in (msg.emotes or [])
         ]
         profile_id = None if msg.profile_id is None else str(msg.profile_id)
+        support_json = json.dumps(msg.support.to_dict()) if msg.support else None
         with self._lock:
             with self._connect() as conn:
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO messages
-                    (id, platform, channel, handle, profile_id, text, emotes_json, kind, ts, display_name)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, platform, channel, handle, profile_id, text, emotes_json, kind, ts, display_name, support_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         msg.id,
@@ -115,11 +141,116 @@ class CommunityStore:
                         msg.kind or "chat",
                         float(msg.ts),
                         display,
+                        support_json,
                     ),
                 )
                 conn.commit()
         if handle:
             self.touch_presence(msg.platform, handle)
+        if (msg.kind or "") in SUPPORT_KINDS:
+            self.record_supporter(msg)
+
+    def record_supporter(self, msg: ChatMessage) -> None:
+        user = msg.user if isinstance(msg.user, ChatUser) else ChatUser()
+        handle = (user.handle or user.display_name or "").strip()
+        display = (user.display_name or user.handle or "").strip()
+        if not handle and not display:
+            return
+        ts = float(msg.ts or self._now())
+        day = time.strftime("%Y-%m-%d", time.gmtime(ts))
+        support = msg.support
+        profile_id = None if msg.profile_id is None else str(msg.profile_id)
+        with self._lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO supporters
+                    (day, platform, handle, display_name, profile_id, kind, amount, currency, tier, count, ts)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        day,
+                        msg.platform or "",
+                        handle,
+                        display,
+                        profile_id,
+                        msg.kind or "gift",
+                        None if not support else support.amount,
+                        None if not support else support.currency,
+                        None if not support else support.tier,
+                        None if not support else support.count,
+                        ts,
+                    ),
+                )
+                conn.commit()
+
+    def supporters_today(self, *, now: Optional[float] = None) -> list[dict[str, Any]]:
+        """Today's supporters grouped by profile_id (or platform+handle)."""
+        ts = self._now() if now is None else float(now)
+        day = time.strftime("%Y-%m-%d", time.gmtime(ts))
+        with self._lock:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT platform, handle, display_name, profile_id, kind,
+                           amount, currency, tier, count, ts
+                    FROM supporters
+                    WHERE day = ?
+                    ORDER BY ts ASC
+                    """,
+                    (day,),
+                ).fetchall()
+        groups: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            profile_id = r["profile_id"]
+            handle = r["handle"] or ""
+            display = r["display_name"] or handle
+            key = f"profile:{profile_id}" if profile_id else f"{r['platform']}:{handle.lower()}"
+            g = groups.get(key)
+            if not g:
+                g = {
+                    "key": key,
+                    "profile_id": int(profile_id) if profile_id and str(profile_id).isdigit() else profile_id,
+                    "display_name": display,
+                    "handle": handle,
+                    "platforms": [],
+                    "kinds": [],
+                    "events": 0,
+                    "count_total": 0,
+                    "amount_total": None,
+                    "currency": None,
+                    "last_ts": float(r["ts"]),
+                }
+                groups[key] = g
+            plat = r["platform"]
+            if plat and plat not in g["platforms"]:
+                g["platforms"].append(plat)
+            kind = r["kind"] or "gift"
+            if kind not in g["kinds"]:
+                g["kinds"].append(kind)
+            g["events"] += 1
+            try:
+                c = int(r["count"] or 1)
+            except (TypeError, ValueError):
+                c = 1
+            g["count_total"] += max(1, c)
+            if r["amount"] is not None:
+                try:
+                    amt = float(r["amount"])
+                except (TypeError, ValueError):
+                    amt = None
+                if amt is not None:
+                    cur = r["currency"]
+                    if g["amount_total"] is None:
+                        g["amount_total"] = amt
+                        g["currency"] = cur
+                    elif g["currency"] == cur:
+                        g["amount_total"] += amt
+            g["last_ts"] = max(float(g["last_ts"]), float(r["ts"]))
+            if display:
+                g["display_name"] = display
+        out = sorted(groups.values(), key=lambda x: (-x["events"], -x["last_ts"]))
+        return out
 
     def history(
         self,
@@ -136,16 +267,29 @@ class CommunityStore:
         params.append(limit)
         with self._lock:
             with self._connect() as conn:
-                rows = conn.execute(
-                    f"""
-                    SELECT id, platform, channel, handle, profile_id, text, emotes_json, kind, ts, display_name
-                    FROM messages
-                    {where}
-                    ORDER BY ts DESC
-                    LIMIT ?
-                    """,
-                    params,
-                ).fetchall()
+                try:
+                    rows = conn.execute(
+                        f"""
+                        SELECT id, platform, channel, handle, profile_id, text, emotes_json,
+                               kind, ts, display_name, support_json
+                        FROM messages
+                        {where}
+                        ORDER BY ts DESC
+                        LIMIT ?
+                        """,
+                        params,
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    rows = conn.execute(
+                        f"""
+                        SELECT id, platform, channel, handle, profile_id, text, emotes_json, kind, ts, display_name
+                        FROM messages
+                        {where}
+                        ORDER BY ts DESC
+                        LIMIT ?
+                        """,
+                        params,
+                    ).fetchall()
         # Return chronological (oldest → newest) for UI
         items = [self._row_to_client(r) for r in reversed(rows)]
         return items
@@ -163,6 +307,13 @@ class CommunityStore:
                 profile_id = int(profile_id)
             except (TypeError, ValueError):
                 pass
+        support = None
+        keys = row.keys()
+        if "support_json" in keys and row["support_json"]:
+            try:
+                support = json.loads(row["support_json"])
+            except Exception:
+                support = None
         return {
             "id": row["id"],
             "platform": row["platform"],
@@ -181,6 +332,7 @@ class CommunityStore:
             "emotes": emotes,
             "kind": row["kind"] or "chat",
             "ts": float(row["ts"]),
+            "support": support,
         }
 
     def prune(self, *, retention_days: Optional[int] = None) -> int:

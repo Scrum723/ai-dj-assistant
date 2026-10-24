@@ -22,7 +22,7 @@ from typing import Any, Optional
 from urllib.parse import unquote
 
 from community.adapters.base import ChatAdapter, EmitFn
-from community.schema import ChatMessage, ChatUser, Emote
+from community.schema import ChatMessage, ChatUser, Emote, SupportInfo
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,21 @@ EMOTE_CDN = "https://static-cdn.jtvnw.net/emoticons/v2/{id}/default/dark/1.0"
 _TAG_RE = re.compile(r"^@(\S+)\s+(.*)$")
 _PRIVMSG_RE = re.compile(
     r"^:(\w+)!(\w+)@(\w+)\.tmi\.twitch\.tv\s+PRIVMSG\s+#(\w+)\s+:(.*)$"
+)
+_USERNOTICE_RE = re.compile(
+    r"^:tmi\.twitch\.tv\s+USERNOTICE\s+#(\w+)(?:\s+:(.*))?$"
+)
+_SUB_MSG_IDS = frozenset(
+    {
+        "sub",
+        "resub",
+        "subgift",
+        "anonsubgift",
+        "submysterygift",
+        "giftpaidupgrade",
+        "primepaidupgrade",
+        "anongiftpaidupgrade",
+    }
 )
 
 
@@ -77,6 +92,17 @@ def parse_emotes_tag(emotes: str, text: str) -> list[Emote]:
     return result
 
 
+def _bits_support(tags: dict[str, str]) -> Optional[SupportInfo]:
+    bits = tags.get("bits")
+    if not bits:
+        return None
+    try:
+        amount = float(bits)
+    except (TypeError, ValueError):
+        return None
+    return SupportInfo(amount=amount, currency="bits", tier=None, count=1)
+
+
 def parse_privmsg(raw_line: str) -> Optional[ChatMessage]:
     """Parse one IRC line (with optional tags) into ChatMessage. Testable, no network."""
     line = (raw_line or "").strip()
@@ -103,6 +129,8 @@ def parse_privmsg(raw_line: str) -> Optional[ChatMessage]:
     badge_names = [b.split("/", 1)[0] for b in badges_raw.split(",") if b]
     is_mod = tags.get("mod") == "1" or "moderator" in badge_names or "broadcaster" in badge_names
     is_owner = "broadcaster" in badge_names
+    support = _bits_support(tags)
+    kind = "super_chat" if support else "chat"
 
     return ChatMessage(
         id=f"twitch:{msg_id}",
@@ -118,10 +146,99 @@ def parse_privmsg(raw_line: str) -> Optional[ChatMessage]:
         ),
         text=text,
         emotes=parse_emotes_tag(tags.get("emotes") or "", text),
-        kind="chat",
+        kind=kind,
         ts=time.time(),
+        support=support,
         raw={"tags": tags, "login": login},
     )
+
+
+def parse_usernotice(raw_line: str) -> Optional[ChatMessage]:
+    """Parse Twitch USERNOTICE (sub/resub/subgift). Testable, no network."""
+    line = (raw_line or "").strip()
+    if not line:
+        return None
+    tags: dict[str, str] = {}
+    rest = line
+    mtag = _TAG_RE.match(line)
+    if mtag:
+        tags = parse_tags(mtag.group(1))
+        rest = mtag.group(2)
+
+    m = _USERNOTICE_RE.match(rest)
+    if not m:
+        return None
+
+    channel = m.group(1)
+    text = (m.group(2) or "").strip()
+    msg_id_tag = (tags.get("msg-id") or "").lower()
+    login = tags.get("login") or tags.get("display-name") or "fan"
+    display = tags.get("display-name") or login
+    user_id = tags.get("user-id") or login
+    msg_id = tags.get("id") or f"usernotice:{login}:{time.time()}"
+    badges_raw = tags.get("badges") or ""
+    badge_names = [b.split("/", 1)[0] for b in badges_raw.split(",") if b]
+
+    kind = "chat"
+    support: Optional[SupportInfo] = None
+    if msg_id_tag in {"sub", "resub", "primepaidupgrade", "giftpaidupgrade", "anongiftpaidupgrade"}:
+        kind = "member"
+        months = tags.get("msg-param-cumulative-months") or tags.get("msg-param-months") or "1"
+        try:
+            months_i = int(months)
+        except ValueError:
+            months_i = 1
+        plan = tags.get("msg-param-sub-plan") or tags.get("msg-param-sub-plan-name")
+        support = SupportInfo(
+            amount=None,
+            currency=None,
+            tier=str(plan) if plan else None,
+            count=months_i,
+        )
+        if not text:
+            text = f"{'re' if msg_id_tag == 'resub' else ''}subscribed"
+    elif msg_id_tag in {"subgift", "anonsubgift", "submysterygift"}:
+        kind = "gift"
+        count_raw = tags.get("msg-param-mass-gift-count") or tags.get("msg-param-sender-count") or "1"
+        try:
+            count_i = max(1, int(count_raw))
+        except ValueError:
+            count_i = 1
+        support = SupportInfo(count=count_i, tier=tags.get("msg-param-sub-plan") or None)
+        recipient = tags.get("msg-param-recipient-display-name") or tags.get("msg-param-recipient-user-name")
+        if not text:
+            text = f"gifted a sub to {recipient}" if recipient else f"gifted {count_i} sub(s)"
+    elif msg_id_tag == "raid":
+        kind = "system"
+    else:
+        return None
+
+    return ChatMessage(
+        id=f"twitch:{msg_id}",
+        platform="twitch",
+        channel=channel,
+        user=ChatUser(
+            platform_user_id=user_id,
+            handle=login,
+            display_name=display,
+            badges=badge_names,
+            is_mod=tags.get("mod") == "1" or "moderator" in badge_names,
+            is_owner="broadcaster" in badge_names,
+        ),
+        text=text,
+        kind=kind,
+        ts=time.time(),
+        support=support,
+        raw={"tags": tags, "login": login, "msg-id": msg_id_tag},
+    )
+
+
+def parse_irc_line(raw_line: str) -> Optional[ChatMessage]:
+    """PRIVMSG or USERNOTICE → ChatMessage."""
+    msg = parse_privmsg(raw_line)
+    if msg:
+        return msg
+    return parse_usernotice(raw_line)
 
 
 class TwitchAdapter(ChatAdapter):
@@ -206,7 +323,7 @@ class TwitchAdapter(ChatAdapter):
                             except Exception:
                                 return
                             continue
-                        msg = parse_privmsg(line)
+                        msg = parse_irc_line(line)
                         if msg:
                             self._note_emit(msg)
         except Exception as e:

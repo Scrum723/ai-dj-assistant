@@ -14,6 +14,14 @@ from typing import Any, Callable, Optional
 
 from dotenv import load_dotenv
 
+from community.schema import SUPPORT_KINDS
+from community.shoutouts import (
+    BURST_QUIET_SEC,
+    BURST_WINDOW_SEC,
+    LLM_THANKS_TIMEOUT_SEC,
+    merge_support,
+    thank_template,
+)
 from halo_queue import ACK_WAIT_SEC, PriorityQueue
 from llm import LLMProvider, get_provider
 from memory import ViewerMemory
@@ -254,6 +262,9 @@ class CohostAgent:
         self.quiet = False
         self._get_presence: Optional[Callable[[], dict]] = None
         self._publish_halo: Optional[Callable[[str, str], None]] = None
+        self._highlight: Optional[Callable[[dict], None]] = None
+        self._record_supporter: Optional[Callable[[dict], None]] = None
+        self._supporter_bursts: dict[str, dict[str, Any]] = {}
         self._metrics_day = time.strftime("%Y-%m-%d")
         self._calls_today = 0
         self._tokens_est = 0
@@ -343,6 +354,98 @@ class CohostAgent:
 
     def set_publish_halo_hook(self, hook: Optional[Callable[[str, str], None]]) -> None:
         self._publish_halo = hook
+
+    def set_highlight_hook(self, hook: Optional[Callable[[dict], None]]) -> None:
+        self._highlight = hook
+
+    def set_record_supporter_hook(self, hook: Optional[Callable[[dict], None]]) -> None:
+        self._record_supporter = hook
+
+    def _burst_key(self, author: str, platform: str) -> str:
+        return f"{(platform or 'chat').strip().lower()}:{(author or '').strip().lower()}"
+
+    def _flush_supporter_bursts(self, now: Optional[float] = None) -> None:
+        """Enqueue thank-you tasks after quiet debounce (group gifts within 10s gaps)."""
+        now = float(self._clock() if now is None else now)
+        ready: list[str] = []
+        for key, burst in list(self._supporter_bursts.items()):
+            last = float(burst.get("last_ts") or 0)
+            if now - last >= BURST_QUIET_SEC:
+                ready.append(key)
+        for key in ready:
+            burst = self._supporter_bursts.pop(key, None)
+            if not burst:
+                continue
+            self._enqueue_supporter_task(burst, now=now)
+
+    def _enqueue_supporter_task(self, burst: dict[str, Any], *, now: float) -> None:
+        author = burst.get("author") or "Fan"
+        platform = burst.get("platform") or "chat"
+        support = dict(burst.get("support") or {})
+        event_kind = str(burst.get("event_kind") or "supporter")
+        message = str(burst.get("message") or "")
+        item = {
+            "author": author,
+            "message": message,
+            "platform": platform,
+            "ts": now,
+            "event_kind": event_kind,
+            "support": support,
+            "profile_id": burst.get("profile_id"),
+            "_kind": "mention",
+            "_supporter": True,
+            "_burst_count": int(support.get("count") or burst.get("events") or 1),
+        }
+        self.queue.push(
+            kind="supporter",
+            target=author,
+            platform=platform,
+            payload=item,
+            now=now,
+        )
+
+    def _buffer_supporter(
+        self,
+        *,
+        author: str,
+        message: str,
+        platform: str,
+        event_kind: str,
+        support: Optional[dict],
+        profile_id: Any,
+        now: float,
+    ) -> None:
+        key = self._burst_key(author, platform)
+        existing = self._supporter_bursts.get(key)
+        support_d = dict(support or {})
+        if existing and (now - float(existing.get("last_ts") or 0)) <= BURST_WINDOW_SEC:
+            existing["support"] = merge_support(existing.get("support"), support_d)
+            existing["last_ts"] = now
+            existing["events"] = int(existing.get("events") or 1) + 1
+            if message:
+                existing["message"] = message
+            # Prefer higher-signal kind (super_chat > gift > member > follow)
+            rank = {"super_chat": 0, "gift": 1, "member": 2, "follow": 3, "supporter": 4}
+            if rank.get(event_kind, 9) < rank.get(str(existing.get("event_kind") or ""), 9):
+                existing["event_kind"] = event_kind
+            return
+        # Flush any stale open burst for this key first
+        if existing:
+            self._supporter_bursts.pop(key, None)
+            self._enqueue_supporter_task(existing, now=now)
+        if not support_d.get("count"):
+            support_d["count"] = 1
+        self._supporter_bursts[key] = {
+            "author": author,
+            "platform": platform,
+            "message": message,
+            "event_kind": event_kind,
+            "support": support_d,
+            "profile_id": profile_id,
+            "first_ts": now,
+            "last_ts": now,
+            "events": 1,
+        }
 
     def _roll_metrics_day(self) -> None:
         day = time.strftime("%Y-%m-%d")
@@ -681,18 +784,22 @@ class CohostAgent:
         *,
         from_aggregator: bool = False,
         event_kind: str | None = None,
+        support: dict | None = None,
+        profile_id: Any = None,
     ):
         author = (author or "Fan").strip()[:40]
         message = (message or "").strip()[:280]
-        if not message:
+        ek = (event_kind or "").strip().lower() or None
+        is_support = ek in SUPPORT_KINDS or ek == "supporter"
+        if not message and not is_support:
             return
         if author.lower() in IGNORE_USERS:
             return
 
-        if self._handle_operator_command(author, message, platform):
+        if message and self._handle_operator_command(author, message, platform):
             return
 
-        if not from_aggregator:
+        if not from_aggregator and message:
             ok, reason = check_input(
                 author,
                 message,
@@ -716,7 +823,9 @@ class CohostAgent:
             "message": message,
             "platform": platform,
             "ts": now,
-            "event_kind": event_kind,
+            "event_kind": ek,
+            "support": support,
+            "profile_id": profile_id,
         }
         self.chat.append(item)
         if author not in self.viewers:
@@ -725,9 +834,26 @@ class CohostAgent:
             self.last_real_chat = now
         if not from_aggregator:
             self.note_chat(item)
+
+        if is_support:
+            self._buffer_supporter(
+                author=author,
+                message=message,
+                platform=platform,
+                event_kind=ek or "supporter",
+                support=support,
+                profile_id=profile_id,
+                now=now,
+            )
+            try:
+                self._inbox.put_nowait(item)
+            except asyncio.QueueFull:
+                pass
+            return
+
         classified = self._classify(author, message, platform=platform)
         item["_kind"] = classified
-        q_kind = self._queue_kind(classified, author, platform, event_kind=event_kind)
+        q_kind = self._queue_kind(classified, author, platform, event_kind=ek)
         self._sync_queue_config()
         self.queue.push(
             kind=q_kind,
@@ -787,6 +913,7 @@ class CohostAgent:
             except asyncio.QueueEmpty:
                 break
 
+        self._flush_supporter_bursts(now)
         self.queue.expire(now)
 
         min_sec = self._min_reply_sec()
@@ -902,6 +1029,48 @@ class CohostAgent:
                 selected[0], autonomy, dj_mode=dj_mode, caps=caps, energy=energy
             )
 
+    def _say_amounts(self) -> bool:
+        return bool((self._cfg().get("halo") or {}).get("say_amounts"))
+
+    def _thanks_line(self, item: dict) -> str:
+        halo = self._cfg().get("halo") or {}
+        support = item.get("support") if isinstance(item.get("support"), dict) else {}
+        count = item.get("_burst_count")
+        if count is None:
+            try:
+                count = int((support or {}).get("count") or 1)
+            except (TypeError, ValueError):
+                count = 1
+        return thank_template(
+            item.get("platform") or "chat",
+            item.get("author") or "Fan",
+            support,
+            settings_thanks=halo.get("thanks") if isinstance(halo.get("thanks"), dict) else None,
+            say_amounts=self._say_amounts(),
+            count=int(count),
+        )
+
+    def _publish_highlight(self, item: dict, thank_you: str) -> None:
+        support = item.get("support") if isinstance(item.get("support"), dict) else None
+        payload = {
+            "author": item.get("author") or "Fan",
+            "platform": item.get("platform") or "chat",
+            "kind": item.get("event_kind") or "supporter",
+            "text": item.get("message") or "",
+            "support": support,
+            "thank_you": thank_you,
+            "ts": item.get("ts") or self._clock(),
+            "profile_id": item.get("profile_id"),
+        }
+        # Strip amounts from spoken-facing card copy when say_amounts is off —
+        # card may still show amount visually; thank_you already respects setting.
+        hook = self._highlight
+        if callable(hook):
+            try:
+                hook(payload)
+            except Exception:
+                logger.exception("highlight publish failed")
+
     async def _handle_chat(self, item: dict, autonomy: int, dj_mode: bool = False, caps: dict | None = None, energy: str = "balanced"):
         author = item["author"]
         message = item["message"]
@@ -910,12 +1079,43 @@ class CohostAgent:
         self.mood = "listening"
         caps = caps or {}
         is_op = self._is_operator(author, platform)
-        # DJ quiet: only mentions, requests, operator (max 1 sentence unless operator)
-        if dj_mode and not is_op and kind not in {"mention", "request"}:
+        event_kind = (item.get("event_kind") or "").strip().lower()
+        is_supporter = bool(item.get("_supporter")) or event_kind in SUPPORT_KINDS or event_kind == "supporter"
+        # DJ quiet: only mentions, requests, operator, supporters
+        if dj_mode and not is_op and not is_supporter and kind not in {"mention", "request"}:
             return
         max_sent = 3 if is_op else (1 if dj_mode else 2)
 
         demo = platform == "demo"
+        if is_supporter:
+            fallback = self._thanks_line(item)
+            use_ai = (not demo) and energy != "eco"
+            if use_ai:
+                hint = (
+                    "Thank this supporter in one short spoken sentence. Name them. "
+                    "Do not read donation amounts unless the message already includes them."
+                    if not self._say_amounts()
+                    else "Thank this supporter in one short spoken sentence. Name them."
+                )
+                line = await self._compose(
+                    author,
+                    message or fallback,
+                    fallback=fallback,
+                    hint=hint,
+                    platform=platform,
+                    max_sentences=1,
+                    timeout_sec=LLM_THANKS_TIMEOUT_SEC,
+                )
+            else:
+                line = clip_sentences(fallback, 1)
+            # Never speak amounts unless enabled (scrub digits+$ from LLM if needed)
+            if not self._say_amounts():
+                line = self._scrub_amounts(line, item.get("support"))
+            self._say(line, target=author, mood="hype")
+            self._publish_highlight(item, line)
+            self._last_reply_user[author.lower()] = time.time()
+            return
+
         if kind == "request":
             if not caps.get("requests", True):
                 return
@@ -1119,6 +1319,27 @@ class CohostAgent:
             return ""
         return rec.memory_line()
 
+    @staticmethod
+    def _scrub_amounts(text: str, support: Optional[dict] = None) -> str:
+        """Remove amount phrases when say_amounts is false."""
+        out = text or ""
+        if support and support.get("amount") is not None:
+            try:
+                amt = float(support["amount"])
+                cur = str(support.get("currency") or "").strip()
+                patterns = [rf"\b{re.escape(f'{amt:g}')}\b"]
+                if amt == int(amt):
+                    patterns.append(rf"\b{int(amt)}\b")
+                if cur:
+                    patterns.append(rf"\b{re.escape(cur)}\b")
+                for p in patterns:
+                    out = re.sub(p, "", out, flags=re.I)
+            except (TypeError, ValueError):
+                pass
+        out = re.sub(r"\$\s*\d+(?:[.,]\d+)?", "", out)
+        out = re.sub(r"\s{2,}", " ", out).strip(" ,.-")
+        return out
+
     async def _compose(
         self,
         author: str,
@@ -1127,6 +1348,7 @@ class CohostAgent:
         hint: str,
         platform: str = "chat",
         max_sentences: int | None = None,
+        timeout_sec: float | None = None,
     ) -> str:
         now = time.time()
         self._roll_metrics_day()
@@ -1178,7 +1400,10 @@ class CohostAgent:
 
             self._last_gemini = now
             t0 = time.perf_counter()
-            text = await asyncio.to_thread(_call)
+            if timeout_sec is not None and float(timeout_sec) > 0:
+                text = await asyncio.wait_for(asyncio.to_thread(_call), timeout=float(timeout_sec))
+            else:
+                text = await asyncio.to_thread(_call)
             elapsed_ms = (time.perf_counter() - t0) * 1000.0
             self._calls_today += 1
             self._tokens_est += _estimate_tokens(persona, prompt, text or "")
@@ -1186,6 +1411,9 @@ class CohostAgent:
             cleaned = check_output(text, settings=self._cfg())
             if cleaned and len(cleaned) > 12:
                 return clip_sentences(cleaned, limit)
+            return capped_fallback
+        except asyncio.TimeoutError:
+            logger.info("Halo LLM thank-you timed out; using template")
             return capped_fallback
         except Exception as e:
             err = str(e)

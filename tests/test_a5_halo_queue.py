@@ -79,6 +79,8 @@ def test_cohost_priority_under_load(agent, spoken):
         agent.ingest(f"Fan{i}", f"chatter {i}", platform="room")
         clock.advance(0.01)
     agent.ingest("Tipper", "thanks for the mix", platform="youtube", event_kind="super_chat")
+    # A6 burst debounce (BURST_QUIET_SEC) before supporter task is enqueued
+    clock.advance(1.6)
     asyncio.run(agent._tick())
     assert spoken
     assert spoken[0]["target"] == "Tipper"

@@ -17,7 +17,7 @@ import time
 from typing import Any, Optional
 
 from community.adapters.base import ChatAdapter, EmitFn
-from community.schema import ChatMessage, ChatUser, Emote
+from community.schema import ChatMessage, ChatUser, Emote, SupportInfo
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +25,47 @@ _KIND_MAP = {
     "textMessage": "chat",
     "superChat": "super_chat",
     "superSticker": "super_chat",
-    "newSponsor": "gift",
+    "newSponsor": "member",
+    "memberMilestone": "member",
+    "membershipGifting": "gift",
+    "giftMembershipReceived": "gift",
 }
+
+
+def _support_from_pytchat(item: Any, kind: str) -> Optional[SupportInfo]:
+    if kind not in {"super_chat", "member", "gift"}:
+        return None
+    amount = getattr(item, "amountValue", None)
+    try:
+        amount_f = float(amount) if amount is not None else None
+    except (TypeError, ValueError):
+        amount_f = None
+    currency = getattr(item, "currency", None)
+    currency_s = str(currency).strip() if currency else None
+    tier = None
+    # Official-API shaped attrs if present on fake/fixture objects
+    details = getattr(item, "superChatDetails", None) or getattr(item, "memberMilestoneChatDetails", None)
+    if isinstance(details, dict):
+        if amount_f is None and details.get("amountMicros") is not None:
+            try:
+                amount_f = float(details["amountMicros"]) / 1_000_000.0
+            except (TypeError, ValueError):
+                pass
+        if not currency_s and details.get("currency"):
+            currency_s = str(details["currency"])
+        if details.get("tier") is not None:
+            tier = str(details["tier"])
+        if details.get("memberLevelName"):
+            tier = str(details["memberLevelName"])
+        months = details.get("memberMonth")
+        if months is not None and kind == "member":
+            return SupportInfo(amount=amount_f, currency=currency_s, tier=tier, count=int(months))
+    count = 1 if kind in {"super_chat", "member", "gift"} else None
+    if amount_f is None and not currency_s and tier is None and kind == "chat":
+        return None
+    if kind == "chat":
+        return None
+    return SupportInfo(amount=amount_f, currency=currency_s, tier=tier, count=count)
 
 
 def map_pytchat_item(item: Any, channel: str) -> Optional[ChatMessage]:
@@ -47,7 +86,7 @@ def map_pytchat_item(item: Any, channel: str) -> Optional[ChatMessage]:
             badges.append("moderator")
         if is_owner:
             badges.append("owner")
-        if getattr(author, "isChatSponsor", False):
+        if getattr(author, "isChatSponsor", False) or kind in {"member", "gift"}:
             badges.append("member")
 
         emotes: list[Emote] = []
@@ -66,6 +105,7 @@ def map_pytchat_item(item: Any, channel: str) -> Optional[ChatMessage]:
                 elif isinstance(part, str):
                     pos += len(part)
 
+        support = _support_from_pytchat(item, kind)
         return ChatMessage(
             id=f"youtube:{msg_id}",
             platform="youtube",
@@ -83,6 +123,7 @@ def map_pytchat_item(item: Any, channel: str) -> Optional[ChatMessage]:
             emotes=emotes,
             kind=kind,
             ts=time.time(),
+            support=support,
             raw={"type": type_name, "id": msg_id},
         )
     except Exception:

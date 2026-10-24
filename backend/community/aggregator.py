@@ -178,19 +178,37 @@ class Aggregator:
         client = msg.to_client()
         legacy = msg.to_legacy()
 
-        if self._cohost_ingest:
+        if self._cohost_ingest and msg.kind != "system":
             try:
                 author = msg.user.display_name or msg.user.handle or "Fan"
-                self._cohost_ingest(
-                    author,
-                    msg.text,
-                    platform=msg.platform,
-                    from_aggregator=True,
-                )
-            except TypeError:
-                # Older ingest without from_aggregator
+                support = msg.support.to_dict() if msg.support else None
+                # A5 carry-over: pass kind so Super Chats/subs/gifts hit supporter priority
+                kwargs = {
+                    "platform": msg.platform,
+                    "from_aggregator": True,
+                    "event_kind": msg.kind,
+                    "support": support,
+                    "profile_id": msg.profile_id,
+                }
                 try:
-                    self._cohost_ingest(author, msg.text, platform=msg.platform)
+                    self._cohost_ingest(author, msg.text or "", **kwargs)
+                except TypeError:
+                    # Older ingest without support / event_kind
+                    try:
+                        self._cohost_ingest(
+                            author,
+                            msg.text or "",
+                            platform=msg.platform,
+                            from_aggregator=True,
+                            event_kind=msg.kind,
+                        )
+                    except TypeError:
+                        self._cohost_ingest(
+                            author, msg.text or "", platform=msg.platform, from_aggregator=True
+                        )
+            except TypeError:
+                try:
+                    self._cohost_ingest(author, msg.text or "", platform=msg.platform)
                 except Exception:
                     logger.exception("cohost ingest failed")
             except Exception:

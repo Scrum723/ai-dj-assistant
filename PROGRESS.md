@@ -12,7 +12,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] A3 — Halo speaks to the merged room, with cost and latency controls — Aggregator feed context + platform tags, min_reply_sec selection, /metrics + daily cap, Halo→Aggregator publish
 - [x] A4 — Persona, voice and DJ mode — persona presets (hype/chill/host/custom), DJ quiet (mentions/requests/operator), operator skip rate/cooldown, TTS 4s timeout fallback, dj_mode_silent for old mute
 - [x] A5 — Priority queue and Halo Waiting Room 24/7 mode — PriorityQueue + cohost pull budget/cooldown, wait acks, waiting-room idle, /state queue fields; aggregator operator skip_rate
-- [ ] A6 — Supporter shoutouts
+- [x] A6 — Supporter shoutouts — ChatMessage.support + adapter fixtures (YT/Twitch/Kick/TikTok), burst thank-yous at supporter priority, overlay/room highlight, GET /community/supporters/today; amounts spoken only if halo.say_amounts
 - [ ] B3 — Booth pass identity
 - [ ] A7 — Regulars, recurring segments and rituals
 - [ ] B4 — Adapters with official APIs (Kick, Facebook, Rumble, YouTube official)

@@ -91,6 +91,7 @@ state: dict[str, Any] = {
     "speak_audio": None,
     "log": [],
     "chat": [],
+    "highlight": None,
 }
 _request_seq = 0
 
@@ -208,6 +209,15 @@ def publish_state():
 def note_chat(item: dict):
     state["chat"] = (state["chat"] + [item])[-40:]
     publish_state()
+
+
+def publish_highlight(payload: dict):
+    """Supporter shoutout card → overlay (/ws) and room (/ws/room)."""
+    state["highlight"] = payload
+    publish_state()
+    msg = {"type": "highlight", "payload": payload}
+    broadcast(msg)
+    room_broadcast(msg)
 
 
 def emit_speak(text: str, target: Optional[str] = None, mood: str = "talk", audio_url: Optional[str] = None):
@@ -385,6 +395,7 @@ async def lifespan(app: FastAPI):
 
     agent.set_publish_halo_hook(_publish_halo_reply)
     agent.set_presence_hook(presence_payload)
+    agent.set_highlight_hook(publish_highlight)
     agent.set_demo(bool(cfg.get("demo")))
     if cfg.get("youtube_id"):
         agent.youtube_id = str(cfg.get("youtube_id") or "").strip() or None
@@ -704,6 +715,14 @@ def community_history(before: Optional[float] = None, limit: int = 100):
 @app.get("/community/presence")
 def community_presence():
     return presence_payload()
+
+
+@app.get("/community/supporters/today")
+def community_supporters_today():
+    """Daily supporter wall across platforms (grouped by profile when linked)."""
+    if community_store:
+        return {"supporters": community_store.supporters_today(), "day": time.strftime("%Y-%m-%d", time.gmtime())}
+    return {"supporters": [], "day": time.strftime("%Y-%m-%d", time.gmtime())}
 
 
 @app.post("/agent/demo")

@@ -23,8 +23,10 @@ export default function App() {
   const [target, setTarget] = useState(null);
   const [mood, setMood] = useState('listening');
   const [state, setState] = useState(null);
+  const [highlight, setHighlight] = useState(null);
   const lastSpeakId = useRef(0);
   const audioRef = useRef(null);
+  const highlightTimer = useRef(null);
 
   const finish = () => {
     setIsSpeaking(false);
@@ -74,7 +76,19 @@ export default function App() {
       ws = new WebSocket(WS_URL);
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'state') setState(msg.payload);
+        if (msg.type === 'state') {
+          setState(msg.payload);
+          if (msg.payload?.highlight) {
+            setHighlight(msg.payload.highlight);
+            if (highlightTimer.current) clearTimeout(highlightTimer.current);
+            highlightTimer.current = setTimeout(() => setHighlight(null), 8000);
+          }
+        }
+        if (msg.type === 'highlight' && msg.payload) {
+          setHighlight(msg.payload);
+          if (highlightTimer.current) clearTimeout(highlightTimer.current);
+          highlightTimer.current = setTimeout(() => setHighlight(null), 8000);
+        }
         if (msg.type === 'speak' && msg.text && msg.id !== lastSpeakId.current) {
           lastSpeakId.current = msg.id;
           speak(msg.text, msg.target, msg.mood, msg.audio_url);
@@ -221,6 +235,37 @@ export default function App() {
         }}>
           {track ? `NOW PLAYING · ${shortTitle(track.filename)} · ${Number(track.bpm || 0).toFixed(0)} BPM` : 'Waiting on a track from the booth'}
         </div>
+
+        <AnimatePresence>
+          {highlight && (
+            <motion.div
+              key={`hl-${highlight.ts}-${highlight.author}`}
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10 }}
+              style={{
+                marginTop: 18,
+                padding: '14px 22px',
+                background: 'linear-gradient(135deg, rgba(124,58,237,0.92), rgba(219,39,119,0.88))',
+                borderRadius: 16,
+                border: '2px solid #f9a8d4',
+                maxWidth: '90%',
+                textAlign: 'center',
+                boxShadow: '0 0 28px rgba(219,39,119,0.45)',
+              }}
+            >
+              <div style={{ fontSize: 11, letterSpacing: 1.6, fontWeight: 800, opacity: 0.9 }}>
+                SUPPORTER · {(highlight.platform || '').toUpperCase()} · {(highlight.kind || 'gift').replace('_', ' ').toUpperCase()}
+              </div>
+              <div style={{ fontSize: '1.35rem', fontWeight: 800, marginTop: 6 }}>
+                {highlight.author}
+              </div>
+              {highlight.thank_you && (
+                <div style={{ fontSize: 15, marginTop: 8, opacity: 0.95 }}>{highlight.thank_you}</div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );

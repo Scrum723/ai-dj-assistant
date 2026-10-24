@@ -60,12 +60,15 @@ export default function Room({ state, refresh }) {
   const [liveChat, setLiveChat] = useState([]);
   const [filter, setFilter] = useState('all');
   const [presence, setPresence] = useState({ counts: {}, total: 0 });
+  const [supporters, setSupporters] = useState([]);
+  const [highlight, setHighlight] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const seenIds = useRef(new Set());
   const listRef = useRef(null);
   const stickBottom = useRef(true);
   const historyLoaded = useRef(false);
+  const highlightTimer = useRef(null);
 
   useEffect(() => {
     if (joined && nick) localStorage.setItem(nickKey(), nick);
@@ -111,6 +114,12 @@ export default function Room({ state, refresh }) {
       } catch {
         /* optional */
       }
+      try {
+        const s = await fetch(`${API}/community/supporters/today`).then((r) => r.json());
+        if (!cancelled && s?.supporters) setSupporters(s.supporters);
+      } catch {
+        /* optional */
+      }
     })();
     return () => { cancelled = true; };
   }, [absorb, loadHistory]);
@@ -147,6 +156,15 @@ export default function Room({ state, refresh }) {
           if (item.id) seenIds.current.add(item.id);
           stickBottom.current = true;
           setLiveChat((prev) => mergeById(prev, [item]));
+        }
+        if (msg.type === 'highlight' && msg.payload) {
+          setHighlight(msg.payload);
+          if (highlightTimer.current) clearTimeout(highlightTimer.current);
+          highlightTimer.current = setTimeout(() => setHighlight(null), 10000);
+          fetch(`${API}/community/supporters/today`)
+            .then((r) => r.json())
+            .then((s) => { if (s?.supporters) setSupporters(s.supporters); })
+            .catch(() => {});
         }
       };
       ws.onclose = () => {
@@ -283,8 +301,34 @@ export default function Room({ state, refresh }) {
             </li>
           ))}
         </ul>
+        <div style={{ color: '#f9a8d4', fontSize: 12, letterSpacing: 1.4, fontWeight: 700, marginTop: 18 }}>
+          SUPPORTERS TODAY ({supporters.length})
+        </div>
+        <ul style={{ listStyle: 'none', padding: 0, marginTop: 10, maxHeight: 160, overflow: 'auto' }}>
+          {supporters.map((s) => (
+            <li key={s.key} style={{ padding: '8px 0', borderBottom: '1px solid #2d2d2d', fontSize: 13 }}>
+              <div style={{ fontWeight: 700 }}>{s.display_name || s.handle}</div>
+              <div style={{ color: '#9ca3af', fontSize: 11 }}>
+                {(s.platforms || []).join(' · ') || '—'} · {s.events} event{s.events === 1 ? '' : 's'}
+              </div>
+            </li>
+          ))}
+          {!supporters.length && <li style={{ color: '#6b7280', fontSize: 13 }}>No shoutouts yet today</li>}
+        </ul>
       </aside>
       <section style={{ ...card, display: 'flex', flexDirection: 'column' }}>
+        {highlight && (
+          <div style={{
+            marginBottom: 12, padding: 12, borderRadius: 10,
+            background: 'linear-gradient(135deg, #4c1d95, #9d174d)', border: '1px solid #f9a8d4',
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.2, color: '#fbcfe8' }}>
+              SUPPORTER · {(highlight.platform || '').toUpperCase()}
+            </div>
+            <div style={{ fontWeight: 800, marginTop: 4 }}>{highlight.author}</div>
+            {highlight.thank_you && <div style={{ marginTop: 6, fontSize: 14 }}>{highlight.thank_you}</div>}
+          </div>
+        )}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
           {FILTERS.map((f) => (
             <button
@@ -311,11 +355,18 @@ export default function Room({ state, refresh }) {
             const author = line.user?.display_name || line.user?.handle || line.author || 'Fan';
             const body = line.text ?? line.message ?? '';
             const platform = line.platform || 'room';
+            const supportKind = line.kind && line.kind !== 'chat' ? line.kind : null;
+            const supportBg = supportKind ? '#4c1d95' : (author === haloName || platform === 'halo' ? '#3b0764' : '#1f2937');
             return (
-              <div key={line.id || `${line.ts}-${i}`} style={{ padding: 10, borderRadius: 8, background: author === haloName || platform === 'halo' ? '#3b0764' : '#1f2937' }}>
+              <div key={line.id || `${line.ts}-${i}`} style={{ padding: 10, borderRadius: 8, background: supportBg, border: supportKind ? '1px solid #c084fc' : undefined }}>
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
                   <PlatformBadge platform={platform} />
                   <strong style={{ color: author === haloName || platform === 'halo' ? '#e9d5ff' : '#6ee7b7' }}>{author}</strong>
+                  {supportKind && (
+                    <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 800, color: '#f9a8d4', letterSpacing: 0.6 }}>
+                      {String(supportKind).replace('_', ' ').toUpperCase()}
+                    </span>
+                  )}
                 </div>
                 <div>{body}</div>
               </div>
