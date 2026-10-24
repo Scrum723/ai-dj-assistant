@@ -83,6 +83,9 @@ def _db() -> sqlite3.Connection:
         )
         """
     )
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "email_opt_in" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN email_opt_in INTEGER NOT NULL DEFAULT 0")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS sessions (
@@ -114,15 +117,31 @@ def _check_pw(password: str, stored: str) -> bool:
 
 def _public(row: sqlite3.Row) -> dict[str, Any]:
     perks = json.loads(row["perks"] or "{}")
+    keys = row.keys()
+    opt_in = bool(row["email_opt_in"]) if "email_opt_in" in keys else False
     return {
         "id": row["id"],
         "email": row["email"],
         "display_name": row["display_name"],
         "provider": row["provider"] or "email",
         "perks": perks,
+        "email_opt_in": opt_in,
         "product": "DJ Bot Botty",
         "buddy": "Halo",
     }
+
+
+def set_email_opt_in(user_id: int, opt_in: bool) -> Optional[dict[str, Any]]:
+    """Store going-live email opt-in only — no sending in B8."""
+    conn = _db()
+    conn.execute(
+        "UPDATE users SET email_opt_in = ? WHERE id = ?",
+        (1 if opt_in else 0, int(user_id)),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (int(user_id),)).fetchone()
+    conn.close()
+    return _public(row) if row else None
 
 
 def _default_perks() -> dict:

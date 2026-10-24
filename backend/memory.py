@@ -23,6 +23,23 @@ def _day_key(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+def _utc_day_ordinal(ts: float) -> int:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).toordinal()
+
+
+def next_streak(prev_last: Optional[float], prev_streak: int, now: float) -> int:
+    """Consecutive UTC-day streak. Same day keeps; yesterday +1; else reset to 1."""
+    if prev_last is None:
+        return 1
+    today = _utc_day_ordinal(now)
+    prev = _utc_day_ordinal(prev_last)
+    if prev == today:
+        return max(1, int(prev_streak or 0)) or 1
+    if prev == today - 1:
+        return max(1, int(prev_streak or 0)) + 1
+    return 1
+
+
 def _norm_platform(platform: str) -> str:
     return (platform or "chat").strip().lower() or "chat"
 
@@ -42,6 +59,23 @@ def ordinal(n: int) -> str:
 
 
 MILESTONE_VISITS = (5, 10, 25)
+# Retention badges (B8) — distinct from greeting milestones
+BADGE_THRESHOLDS = (3, 10, 25)
+BADGE_LABELS = {3: "regular", 10: "loyal", 25: "legend"}
+
+
+def retention_badges(visits: int) -> list[str]:
+    """Badge labels earned at 3 / 10 / 25 visits (linked platforms count)."""
+    visits = int(visits or 0)
+    return [BADGE_LABELS[t] for t in BADGE_THRESHOLDS if visits >= t]
+
+
+def retention_summary(visits: int, streak: int = 0) -> dict:
+    return {
+        "visits": int(visits or 0),
+        "streak": int(streak or 0),
+        "badges": retention_badges(visits),
+    }
 
 # Common genre tokens pulled from request text
 _GENRE_TOKENS = (
@@ -120,6 +154,7 @@ class ViewerRecord:
     note: Optional[str]
     where_from: Optional[str] = None
     favourite_genres: Optional[str] = None  # comma-separated
+    streak: int = 0
 
     def genres_list(self) -> list[str]:
         raw = (self.favourite_genres or "").strip()
@@ -127,8 +162,16 @@ class ViewerRecord:
             return []
         return [g.strip() for g in raw.split(",") if g.strip()]
 
+    def badges(self) -> list[str]:
+        return retention_badges(self.visits)
+
+    def retention(self) -> dict:
+        return retention_summary(self.visits, self.streak)
+
     def memory_line(self) -> str:
         parts = [f"{ordinal(self.visits)} visit"]
+        if self.streak and self.streak > 1:
+            parts.append(f"{self.streak}-day streak")
         if self.last_request:
             parts.append(f"last asked for {self.last_request}")
         if self.where_from:
@@ -224,6 +267,8 @@ class ViewerMemory:
                 conn.execute("ALTER TABLE viewers ADD COLUMN where_from TEXT")
             if "favourite_genres" not in cols:
                 conn.execute("ALTER TABLE viewers ADD COLUMN favourite_genres TEXT")
+            if "streak" not in cols:
+                conn.execute("ALTER TABLE viewers ADD COLUMN streak INTEGER NOT NULL DEFAULT 0")
             conn.commit()
 
     def _row_to_record(self, row: sqlite3.Row) -> ViewerRecord:
@@ -239,6 +284,7 @@ class ViewerMemory:
             note=row["note"],
             where_from=row["where_from"] if "where_from" in keys else None,
             favourite_genres=row["favourite_genres"] if "favourite_genres" in keys else None,
+            streak=int(row["streak"]) if "streak" in keys and row["streak"] is not None else 0,
         )
 
     def _merged_for_profile(self, conn: sqlite3.Connection, profile_id: str) -> Optional[ViewerRecord]:
@@ -251,12 +297,15 @@ class ViewerMemory:
         first_seen = min(float(r["first_seen"]) for r in rows)
         last_seen = max(float(r["last_seen"]) for r in rows)
         visits = max(int(r["visits"]) for r in rows)
+        streak = 0
         last_request = None
         note = None
         where_from = None
         genre_set: list[str] = []
         for r in rows:
             keys = r.keys()
+            if "streak" in keys and r["streak"] is not None:
+                streak = max(streak, int(r["streak"]))
             if last_request is None and r["last_request"]:
                 last_request = r["last_request"]
             if note is None and r["note"]:
@@ -280,6 +329,7 @@ class ViewerMemory:
             note=note,
             where_from=where_from,
             favourite_genres=",".join(genre_set) if genre_set else None,
+            streak=streak,
         )
 
     def attach_profile(self, platform: str, handle: str, profile_id: str | int) -> Optional[ViewerRecord]:
@@ -299,6 +349,11 @@ class ViewerMemory:
                 return self._merged_for_profile(conn, pid)
             first_seen = min(float(r["first_seen"]) for r in others)
             visits = max(int(r["visits"]) for r in others)
+            streak = 0
+            for r in others:
+                keys = r.keys()
+                if "streak" in keys and r["streak"] is not None:
+                    streak = max(streak, int(r["streak"]))
             # Carry last_request/note from the richest/most recent sibling onto all rows
             best_req = None
             best_note = None
@@ -314,13 +369,14 @@ class ViewerMemory:
                 conn.execute(
                     """
                     UPDATE viewers
-                    SET first_seen = ?, visits = ?, last_request = COALESCE(?, last_request),
+                    SET first_seen = ?, visits = ?, streak = ?, last_request = COALESCE(?, last_request),
                         note = COALESCE(?, note)
                     WHERE platform = ? AND handle = ?
                     """,
                     (
                         first_seen,
                         visits,
+                        streak,
                         best_req,
                         best_note,
                         r["platform"],
@@ -357,14 +413,18 @@ class ViewerMemory:
             # Also consider prior visits under this profile on other platforms
             profile_prev_last: Optional[float] = None
             profile_visits = 0
+            profile_streak = 0
             if pid:
                 siblings = conn.execute(
-                    "SELECT last_seen, visits FROM viewers WHERE profile_id = ?",
+                    "SELECT last_seen, visits, streak FROM viewers WHERE profile_id = ?",
                     (pid,),
                 ).fetchall()
                 for s in siblings:
                     profile_prev_last = max(profile_prev_last or 0.0, float(s["last_seen"]))
                     profile_visits = max(profile_visits, int(s["visits"]))
+                    sk = s["streak"] if "streak" in s.keys() else 0
+                    if sk is not None:
+                        profile_streak = max(profile_streak, int(sk))
 
             if row is None:
                 # New handle — seed visits from profile siblings when linking
@@ -376,6 +436,11 @@ class ViewerMemory:
                     visits = profile_visits + 1
                 elif is_returning:
                     visits = 2
+                streak = next_streak(
+                    profile_prev_last if pid else None,
+                    profile_streak,
+                    now,
+                )
                 first_seen = now
                 if pid:
                     merged = self._merged_for_profile(conn, pid)
@@ -385,10 +450,10 @@ class ViewerMemory:
                     """
                     INSERT INTO viewers
                     (platform, handle, profile_id, first_seen, last_seen, visits,
-                     last_request, note, where_from, favourite_genres)
-                    VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)
+                     last_request, note, where_from, favourite_genres, streak)
+                    VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?)
                     """,
-                    (platform, handle, pid, first_seen, now, visits),
+                    (platform, handle, pid, first_seen, now, visits, streak),
                 )
                 conn.commit()
                 rec = ViewerRecord(
@@ -402,6 +467,7 @@ class ViewerMemory:
                     note=None,
                     where_from=None,
                     favourite_genres=None,
+                    streak=streak,
                 )
                 if pid:
                     merged = self._merged_for_profile(conn, pid)
@@ -412,10 +478,14 @@ class ViewerMemory:
             prev_last = float(row["last_seen"])
             if profile_prev_last is not None:
                 prev_last = max(prev_last, profile_prev_last)
+            keys = row.keys()
+            row_streak = int(row["streak"]) if "streak" in keys and row["streak"] is not None else 0
+            prev_streak = max(row_streak, profile_streak)
             visits = max(int(row["visits"]), profile_visits or 0)
             is_returning = _day_key(prev_last) < _day_key(now)
             if is_returning:
                 visits += 1
+            streak = next_streak(prev_last, prev_streak, now)
             new_pid = pid if pid is not None else row["profile_id"]
             first_seen = float(row["first_seen"])
             if new_pid:
@@ -428,13 +498,12 @@ class ViewerMemory:
             conn.execute(
                 """
                 UPDATE viewers
-                SET last_seen = ?, visits = ?, profile_id = ?, first_seen = ?
+                SET last_seen = ?, visits = ?, profile_id = ?, first_seen = ?, streak = ?
                 WHERE platform = ? AND handle = ?
                 """,
-                (now, visits, new_pid, first_seen, platform, handle),
+                (now, visits, new_pid, first_seen, streak, platform, handle),
             )
             conn.commit()
-            keys = row.keys()
             rec = ViewerRecord(
                 platform=platform,
                 handle=handle,
@@ -446,6 +515,7 @@ class ViewerMemory:
                 note=row["note"],
                 where_from=row["where_from"] if "where_from" in keys else None,
                 favourite_genres=row["favourite_genres"] if "favourite_genres" in keys else None,
+                streak=streak,
             )
             if new_pid:
                 merged = self._merged_for_profile(conn, str(new_pid))
@@ -488,6 +558,22 @@ class ViewerMemory:
             return None
         with self._connect() as conn:
             return self._merged_for_profile(conn, pid)
+
+    def retention_for(
+        self,
+        *,
+        platform: str = "",
+        handle: str = "",
+        profile_id: Optional[str | int] = None,
+    ) -> dict:
+        rec = None
+        if profile_id is not None and str(profile_id).strip():
+            rec = self.get_by_profile(profile_id)
+        if rec is None and handle:
+            rec = self.get(platform or "chat", handle, profile_id=profile_id)
+        if rec is None:
+            return retention_summary(0, 0)
+        return rec.retention()
 
     def remember_request(
         self,

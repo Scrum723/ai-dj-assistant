@@ -113,6 +113,8 @@ class ChatMessage:
     profile_id: Optional[int] = None
     support: Optional[SupportInfo] = None
     raw: Optional[dict[str, Any]] = None
+    visits: Optional[int] = None
+    streak: Optional[int] = None
 
     def to_dict(self, *, include_raw: bool = True) -> dict[str, Any]:
         data = {
@@ -128,6 +130,8 @@ class ChatMessage:
             "kind": self.kind,
             "ts": self.ts,
             "support": self.support.to_dict() if self.support else None,
+            "visits": self.visits,
+            "streak": self.streak,
         }
         if include_raw and self.raw is not None:
             data["raw"] = self.raw
@@ -198,6 +202,8 @@ class ChatMessage:
             profile_id=data.get("profile_id"),
             support=support,
             raw=data.get("raw"),
+            visits=int(data["visits"]) if data.get("visits") is not None else None,
+            streak=int(data["streak"]) if data.get("streak") is not None else None,
         )
 
     @classmethod

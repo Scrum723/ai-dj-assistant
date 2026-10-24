@@ -93,6 +93,7 @@ DEFAULTS = {
     "demo": False,
     "youtube_id": "",
     "autonomy": 70,
+    "shows": [],  # [{start_iso, title}, ...]
     "moderation": {
         "blocklist": [],
     },

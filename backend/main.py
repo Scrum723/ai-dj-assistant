@@ -5,6 +5,7 @@ import socket
 import sqlite3
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -13,8 +14,9 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from auth import COOKIE, require_operator, require_room_mod, user_from_cookie
+from auth import COOKIE, require_operator, require_room_mod, set_email_opt_in, user_from_cookie
 from auth import router as auth_router
+from llm import get_provider
 from cohost import CohostAgent
 from community.aggregator import Aggregator
 from community.adapters.facebook import FacebookAdapter
@@ -420,6 +422,7 @@ async def lifespan(app: FastAPI):
         identity=identity_store,
         mod=community_mod,
         on_linked=_on_linked,
+        memory=agent.memory,
     )
     community_mod.set_get_adapters(aggregator.adapters_map)
     community_relay = CommunityRelay(
@@ -895,7 +898,20 @@ def me_profile(djbb_session: Optional[str] = Cookie(default=None, alias=COOKIE))
         raise HTTPException(401, "Sign in required")
     identity = get_identity()
     links = identity.list_links(int(user["id"]))
-    return {"user": user, "linked_handles": links}
+    retention = {"visits": 0, "streak": 0, "badges": []}
+    if agent and getattr(agent, "memory", None) is not None:
+        try:
+            retention = agent.memory.retention_for(profile_id=user["id"])
+        except Exception:
+            logger.exception("retention lookup failed")
+    return {
+        "user": user,
+        "linked_handles": links,
+        "visits": retention.get("visits", 0),
+        "streak": retention.get("streak", 0),
+        "badges": retention.get("badges") or [],
+        "retention": retention,
+    }
 
 
 @app.post("/me/link-code")
@@ -920,6 +936,86 @@ def me_unlink(body: UnlinkIn, djbb_session: Optional[str] = Cookie(default=None,
     identity = get_identity()
     ok = identity.unlink(int(user["id"]), body.platform, body.handle)
     return {"ok": ok, "linked_handles": identity.list_links(int(user["id"]))}
+
+
+class NotifyIn(BaseModel):
+    email_opt_in: bool = False
+
+
+@app.post("/me/notify")
+def me_notify(body: NotifyIn, djbb_session: Optional[str] = Cookie(default=None, alias=COOKIE)):
+    """Store going-live email opt-in only — no mail is sent in B8."""
+    user = user_from_cookie(djbb_session)
+    if not user:
+        raise HTTPException(401, "Sign in required")
+    updated = set_email_opt_in(int(user["id"]), bool(body.email_opt_in))
+    if not updated:
+        raise HTTPException(404, "User not found")
+    return {"ok": True, "email_opt_in": bool(updated.get("email_opt_in")), "user": updated}
+
+
+def _parse_show_start(raw: str) -> Optional[datetime]:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def next_show_payload(cfg: Optional[dict] = None, *, now: Optional[datetime] = None) -> dict:
+    cfg = cfg if cfg is not None else load_settings()
+    now = now or datetime.now(timezone.utc)
+    shows = cfg.get("shows") or []
+    upcoming: list[tuple[datetime, dict]] = []
+    for item in shows:
+        if not isinstance(item, dict):
+            continue
+        start = _parse_show_start(str(item.get("start_iso") or ""))
+        if start is None:
+            continue
+        if start >= now:
+            upcoming.append((start, {"start_iso": start.isoformat().replace("+00:00", "Z"), "title": str(item.get("title") or "Live set")}))
+    upcoming.sort(key=lambda x: x[0])
+    nxt = upcoming[0][1] if upcoming else None
+    return {"next": nxt, "shows": [u[1] for u in upcoming[:10]]}
+
+
+@app.get("/shows/next")
+def shows_next():
+    return next_show_payload()
+
+
+@app.get("/healthz")
+def healthz():
+    """Railway / cloud health — always 200; midi may be false without mido."""
+    midi_ok = bool(getattr(dj, "connected", False))
+    llm_ok = False
+    try:
+        if agent and getattr(agent, "_llm", None) is not None:
+            llm_ok = bool(agent._llm.available)
+        else:
+            llm_ok = bool(get_provider().available)
+    except Exception:
+        llm_ok = False
+    adapters = {}
+    if aggregator:
+        try:
+            adapters = (aggregator.status() or {}).get("adapters") or {}
+        except Exception:
+            adapters = {}
+    return {
+        "ok": True,
+        "midi": midi_ok,
+        "llm": llm_ok,
+        "adapters": adapters,
+    }
 
 
 @app.post("/chat")

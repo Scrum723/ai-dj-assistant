@@ -127,6 +127,13 @@ Halo starts with the app. The overlay is her face: she greets people, answers ch
 | `RUMBLE_LIVESTREAM_API_URL` | unset | Rumble livestream API URL (embeds key) |
 | `FACEBOOK_PAGE_ACCESS_TOKEN` | unset | Facebook Page token for Live comments |
 
+### Railway / djbotbotty.com
+
+- Health check path: **`/healthz`** — returns `{ok, midi, llm, adapters}`. Always HTTP 200; `midi` is `false` on cloud (no mido). Point Railway health at `/healthz`.
+- Mount a volume at `DATA_DIR` for `halo.db`, `community.db`, `users.db`.
+- Set `OPERATOR_KEY`, `COOKIE_SECURE=true`, and an LLM key (`GEMINI_API_KEY` or `XAI_API_KEY`).
+- Show schedule: `settings.shows` as `[{start_iso, title}]`; room/overlay show **Next live** via `GET /shows/next`.
+
 Switch providers with `HALO_PROVIDER` only — no code change. Viewer memory persists in `$DATA_DIR/halo.db`; room history in `$DATA_DIR/community.db`. Full template: `.env.example`.
 
 ### Platform reality

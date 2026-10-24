@@ -68,6 +68,8 @@ export default function Room({ state, refresh }) {
   const [hasMore, setHasMore] = useState(true);
   const [isMod, setIsMod] = useState(false);
   const [modMenuId, setModMenuId] = useState(null);
+  const [nextShow, setNextShow] = useState(null);
+  const [myRetention, setMyRetention] = useState({ streak: 0, visits: 0, badges: [] });
   const seenIds = useRef(new Set());
   const listRef = useRef(null);
   const stickBottom = useRef(true);
@@ -136,6 +138,24 @@ export default function Room({ state, refresh }) {
       try {
         const m = await fetch(`${API}/community/mod/me`, { credentials: 'include' }).then((r) => r.json());
         if (!cancelled && m?.is_mod) setIsMod(true);
+      } catch {
+        /* optional */
+      }
+      try {
+        const sh = await fetch(`${API}/shows/next`).then((r) => r.json());
+        if (!cancelled) setNextShow(sh?.next || null);
+      } catch {
+        /* optional */
+      }
+      try {
+        const me = await fetch(`${API}/me/profile`, { credentials: 'include' }).then((r) => (r.ok ? r.json() : null));
+        if (!cancelled && me) {
+          setMyRetention({
+            streak: me.streak || 0,
+            visits: me.visits || 0,
+            badges: me.badges || [],
+          });
+        }
       } catch {
         /* optional */
       }
@@ -262,6 +282,8 @@ export default function Room({ state, refresh }) {
   const haloName = agent.name || 'Halo';
   const room = settings.room || {};
   const counts = presence.counts || {};
+  const live = agent.live !== false && !agent.waiting_room;
+  const queueLength = agent.queue_length ?? (Array.isArray(agent.queue) ? agent.queue.length : 0);
 
   const send = async () => {
     if (!text.trim() || !nick.trim()) return;
@@ -330,8 +352,33 @@ export default function Room({ state, refresh }) {
     <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 24, minHeight: 560 }}>
       <aside style={card}>
         <RoomUrls urls={state?.room_urls} copy={copy} />
+        {!live && nextShow && (
+          <div style={{
+            marginTop: 14, marginBottom: 8, padding: '10px 12px', borderRadius: 10,
+            background: 'linear-gradient(135deg, #1e1b4b, #4c1d95)', border: '1px solid #a78bfa',
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.2, color: '#c4b5fd' }}>NEXT LIVE</div>
+            <div style={{ fontWeight: 800, marginTop: 4 }}>{nextShow.title || 'Live set'}</div>
+            <div style={{ color: '#e0e7ff', fontSize: 12, marginTop: 4 }}>
+              {nextShow.start_iso ? new Date(nextShow.start_iso).toLocaleString() : ''}
+            </div>
+          </div>
+        )}
+        {(myRetention.streak > 0 || (myRetention.badges || []).length > 0) && (
+          <div style={{ marginTop: 10, marginBottom: 6, fontSize: 13, color: '#fde68a' }}>
+            {myRetention.streak > 0 ? `🔥 ${myRetention.streak}-day streak` : null}
+            {(myRetention.badges || []).length > 0 && (
+              <span style={{ marginLeft: myRetention.streak > 0 ? 8 : 0, color: '#c4b5fd' }}>
+                {(myRetention.badges || []).join(' · ')}
+              </span>
+            )}
+          </div>
+        )}
         <div style={{ color: '#c4b5fd', fontSize: 12, letterSpacing: 1.4, fontWeight: 700, marginTop: 16 }}>NOW PLAYING</div>
         <h3 style={{ margin: '8px 0 8px' }}>{title}</h3>
+        {typeof queueLength === 'number' && queueLength > 0 && (
+          <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 10 }}>Halo queue · {queueLength}</div>
+        )}
         {currentSegment?.name && (
           <div style={{
             marginBottom: 14, padding: '8px 10px', borderRadius: 8,
@@ -343,7 +390,9 @@ export default function Room({ state, refresh }) {
           </div>
         )}
         <div style={{ margin: '16px 0 18px' }}>
-          <div style={{ color: '#c4b5fd', fontSize: 12, letterSpacing: 1.4, fontWeight: 700, marginBottom: 8 }}>WATCH LIVE</div>
+          <div style={{ color: '#c4b5fd', fontSize: 12, letterSpacing: 1.4, fontWeight: 700, marginBottom: 8 }}>
+            {live ? 'WATCH LIVE' : 'CATCH THE STREAM'}
+          </div>
           <StreamLinks settings={settings} compact />
         </div>
         <div style={{ color: '#c4b5fd', fontSize: 12, letterSpacing: 1.4, fontWeight: 700 }}>
@@ -440,6 +489,15 @@ export default function Room({ state, refresh }) {
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
                   <PlatformBadge platform={platform} />
                   <strong style={{ color: author === haloName || platform === 'halo' ? '#e9d5ff' : '#6ee7b7' }}>{author}</strong>
+                  {(line.user?.badges || []).filter((b) => ['regular', 'loyal', 'legend'].includes(b)).map((b) => (
+                    <span key={b} style={{
+                      marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: 0.5,
+                      padding: '1px 5px', borderRadius: 4, background: '#312e81', color: '#c4b5fd',
+                    }}>{b}</span>
+                  ))}
+                  {line.streak > 1 && (
+                    <span style={{ marginLeft: 6, fontSize: 10, color: '#fde68a' }}>{line.streak}🔥</span>
+                  )}
                   {supportKind && (
                     <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 800, color: '#f9a8d4', letterSpacing: 0.6 }}>
                       {String(supportKind).replace('_', ' ').toUpperCase()}

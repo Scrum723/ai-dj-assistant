@@ -11,6 +11,7 @@ from typing import Any, Callable, Optional
 
 from community.adapters.base import ChatAdapter
 from community.schema import SUPPORT_KINDS, ChatMessage, ChatUser
+from memory import retention_badges
 from moderation import check_input
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class Aggregator:
         mod: Optional[ModLike] = None,
         on_linked: Optional[Callable[[dict], None]] = None,
         relay: Optional[Any] = None,
+        memory: Optional[Any] = None,
     ):
         self._adapters: dict[str, ChatAdapter] = {}
         self._cohost_ingest = cohost_ingest
@@ -72,6 +74,7 @@ class Aggregator:
         self._mod = mod
         self._on_linked = on_linked
         self._relay = relay
+        self._memory = memory
         self._dedupe = _LRUSet()
         self._history: deque[ChatMessage] = deque(maxlen=HISTORY_MAX)
         self._lock = threading.Lock()
@@ -97,6 +100,47 @@ class Aggregator:
                 relay.set_get_adapters(self.adapters_map)
             except Exception:
                 logger.exception("relay set_get_adapters failed")
+
+    def set_memory(self, memory: Optional[Any]) -> None:
+        self._memory = memory
+
+    def _enrich_retention_badges(self, msg: ChatMessage) -> None:
+        """Append visit badges (regular/loyal/legend) without wiping platform badges."""
+        if self._memory is None or msg.kind == "system":
+            return
+        try:
+            user = msg.user if isinstance(msg.user, ChatUser) else ChatUser()
+            summary = None
+            if hasattr(self._memory, "retention_for"):
+                summary = self._memory.retention_for(
+                    platform=msg.platform,
+                    handle=user.handle or user.display_name or "",
+                    profile_id=msg.profile_id,
+                )
+            elif hasattr(self._memory, "get"):
+                rec = None
+                if msg.profile_id is not None and hasattr(self._memory, "get_by_profile"):
+                    rec = self._memory.get_by_profile(msg.profile_id)
+                if rec is None:
+                    rec = self._memory.get(
+                        msg.platform,
+                        user.handle or user.display_name or "",
+                        profile_id=msg.profile_id,
+                    )
+                summary = rec.retention() if rec and hasattr(rec, "retention") else None
+            if not summary:
+                return
+            earned = list(summary.get("badges") or retention_badges(summary.get("visits") or 0))
+            existing = list(user.badges or [])
+            for b in earned:
+                if b not in existing:
+                    existing.append(b)
+            user.badges = existing
+            msg.user = user
+            msg.visits = int(summary.get("visits") or 0)
+            msg.streak = int(summary.get("streak") or 0)
+        except Exception:
+            logger.exception("retention badge enrich failed")
 
     def register(self, adapter: ChatAdapter) -> None:
         self._adapters[adapter.name] = adapter
@@ -383,6 +427,8 @@ class Aggregator:
         if not ok:
             logger.info("aggregator moderation drop id=%s reason=%s", msg.id, reason)
             return False
+
+        self._enrich_retention_badges(msg)
 
         with self._lock:
             self._history.append(msg)

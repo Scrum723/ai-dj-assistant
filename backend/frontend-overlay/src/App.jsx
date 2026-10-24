@@ -24,9 +24,19 @@ export default function App() {
   const [mood, setMood] = useState('listening');
   const [state, setState] = useState(null);
   const [highlight, setHighlight] = useState(null);
+  const [nextShow, setNextShow] = useState(null);
   const lastSpeakId = useRef(0);
   const audioRef = useRef(null);
   const highlightTimer = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API}/shows/next`)
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) setNextShow(d?.next || null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const finish = () => {
     setIsSpeaking(false);
@@ -120,6 +130,9 @@ export default function App() {
   const liveMood = isSpeaking ? (mood || 'speaking') : (agent.dj_mode ? 'quiet' : (agent.mood || 'listening'));
   const distraction = (state?.settings?.environment?.distraction ?? 30) / 100;
   const haloName = agent.name || 'Halo';
+  const live = agent.live !== false && !agent.waiting_room;
+  const streams = state?.settings?.streams || {};
+  const streamEntries = Object.entries(streams).filter(([, url]) => String(url || '').trim());
 
   return (
     <div style={{
@@ -235,6 +248,29 @@ export default function App() {
         }}>
           {track ? `NOW PLAYING · ${shortTitle(track.filename)} · ${Number(track.bpm || 0).toFixed(0)} BPM` : 'Waiting on a track from the booth'}
         </div>
+
+        {!live && nextShow && (
+          <div style={{
+            marginTop: 16,
+            padding: '12px 20px',
+            background: 'rgba(76,29,149,0.85)',
+            borderRadius: 14,
+            border: '1px solid #a78bfa',
+            textAlign: 'center',
+            maxWidth: '90%',
+          }}>
+            <div style={{ fontSize: 11, letterSpacing: 1.4, fontWeight: 800, color: '#c4b5fd' }}>NEXT LIVE</div>
+            <div style={{ fontSize: 18, fontWeight: 800, marginTop: 4 }}>{nextShow.title || 'Live set'}</div>
+            <div style={{ fontSize: 13, color: '#e0e7ff', marginTop: 4 }}>
+              {nextShow.start_iso ? new Date(nextShow.start_iso).toLocaleString() : ''}
+            </div>
+            {streamEntries.length > 0 && (
+              <div style={{ marginTop: 8, fontSize: 12, color: '#d1d5db' }}>
+                {streamEntries.map(([k]) => k).join(' · ')}
+              </div>
+            )}
+          </div>
+        )}
 
         <AnimatePresence>
           {highlight && (

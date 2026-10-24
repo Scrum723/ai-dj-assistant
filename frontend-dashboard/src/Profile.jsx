@@ -16,6 +16,9 @@ export default function Profile({ onBack }) {
   const [code, setCode] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  const [retention, setRetention] = useState({ visits: 0, streak: 0, badges: [] });
+  const [optIn, setOptIn] = useState(false);
+  const [notifyMsg, setNotifyMsg] = useState('');
 
   const load = useCallback(async () => {
     setErr('');
@@ -29,6 +32,12 @@ export default function Profile({ onBack }) {
       const data = await res.json();
       setUser(data.user);
       setLinks(data.linked_handles || []);
+      setRetention({
+        visits: data.visits || 0,
+        streak: data.streak || 0,
+        badges: data.badges || [],
+      });
+      setOptIn(!!data.user?.email_opt_in);
     } catch {
       setErr('Could not load profile.');
     }
@@ -72,6 +81,31 @@ export default function Profile({ onBack }) {
     }
   };
 
+  const saveNotify = async (value) => {
+    setBusy(true);
+    setNotifyMsg('');
+    try {
+      const res = await fetch(`${API}/me/notify`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email_opt_in: value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setNotifyMsg(data.detail || 'Could not save preference');
+        return;
+      }
+      setOptIn(!!data.email_opt_in);
+      setNotifyMsg('Saved (alerts not sent yet — preference stored only).');
+      if (data.user) setUser(data.user);
+    } catch {
+      setNotifyMsg('Could not save preference');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!user && !err) {
     return <div style={wrap}><p style={{ color: '#9ca3af' }}>Loading profile…</p></div>;
   }
@@ -89,6 +123,37 @@ export default function Profile({ onBack }) {
         <p style={{ color: '#9ca3af', margin: 0 }}>{user?.email || 'No email on file'}</p>
         <p style={{ color: '#c4b5fd', fontSize: 13 }}>Provider · {user?.provider || 'email'}</p>
         {err && <p style={{ color: '#fca5a5' }}>{typeof err === 'string' ? err : JSON.stringify(err)}</p>}
+
+        <h3 style={{ marginTop: 20, marginBottom: 8 }}>Retention</h3>
+        <p style={{ color: '#fde68a', margin: '0 0 8px' }}>
+          {retention.streak > 0 ? `🔥 ${retention.streak}-day streak` : 'No streak yet'}
+          {' · '}
+          {retention.visits || 0} visit{(retention.visits || 0) === 1 ? '' : 's'}
+        </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+          {(retention.badges || []).length === 0 ? (
+            <span style={{ color: '#6b7280', fontSize: 13 }}>Badges at 3 / 10 / 25 visits across linked platforms</span>
+          ) : (
+            (retention.badges || []).map((b) => (
+              <span key={b} style={{
+                padding: '4px 10px', borderRadius: 999, background: '#312e81',
+                border: '1px solid #818cf8', fontSize: 12, fontWeight: 700, color: '#c4b5fd',
+              }}>{b}</span>
+            ))
+          )}
+        </div>
+
+        <h3 style={{ marginTop: 20, marginBottom: 8 }}>Going-live alerts</h3>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#e5e7eb', fontSize: 14 }}>
+          <input
+            type="checkbox"
+            checked={optIn}
+            disabled={busy}
+            onChange={(e) => saveNotify(e.target.checked)}
+          />
+          Email me when Charles goes live (stored only — no mail yet)
+        </label>
+        {notifyMsg ? <p style={{ color: '#9ca3af', fontSize: 13 }}>{notifyMsg}</p> : null}
 
         <h3 style={{ marginTop: 20, marginBottom: 8 }}>Perks</h3>
         <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 6 }}>

@@ -19,7 +19,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] B5 — Experimental adapters: TikTok LIVE and X — optional TikTokLive + X replies poll; experimental flags; auto-disable 5/10min; README Platform reality; Settings warning
 - [x] B6 — Unified moderation and ban sync — community/mod bans by profile or platform+handle, Aggregator drop + delete-message, POST /community/mod/{ban,timeout,unban,delete}, push_bans opt-in, Room mod menu, mod_log; empty SUPPORT_KINDS through Aggregator
 - [x] B7 — Relay back to platform chats — community/relay rules+token-bucket+echo map; send() Twitch/YT official/Kick/FB; Aggregator loop drop; off by default
-- [ ] B8 — Retention hooks and djbotbotty.com front door
+- [x] B8 — Retention hooks and djbotbotty.com front door — shows/next, streaks+badges 3/10/25, /me/notify store-only, /healthz without mido
 - [ ] C1 — MIDI control layer and fake deck sandbox
 - [ ] C2 — Track analysis v2
 - [ ] C3 — Next-track selection
@@ -50,7 +50,7 @@ Concrete setup checklist (no credentials invented here — create these when rea
 
 ### Railway / djbotbotty.com (B8 / D1)
 - [ ] Railway volume mounted at `DATA_DIR`
-- [ ] Health check → `/healthz` (added in B8/D1)
+- [x] Health check → `/healthz` (B8)
 - [ ] Set `OPERATOR_KEY` and `COOKIE_SECURE=true` in production
 - [ ] LLM keys (`GEMINI_API_KEY` or `XAI_API_KEY`) on Railway
 
