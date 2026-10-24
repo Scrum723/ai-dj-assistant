@@ -33,6 +33,7 @@ from community.relay import CommunityRelay
 from community.schema import ChatMessage, ChatUser
 from community.store import CommunityStore, DEFAULT_RETENTION_DAYS
 from dj_controller import DJController, MIDI_MAP
+from mixer import Mixer
 from selector import pick as selector_pick
 from selector import plan_names as selector_plan_names
 from sentinel import is_killed
@@ -46,6 +47,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 dj = DJController(port_name="AI_DJ_Virtual_Port")
+# Automation off by default — enable via POST /dj/automation
+mixer = Mixer(dj, enabled=False)
 DB_PATH = os.path.join(os.path.dirname(__file__), "library.db")
 KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 EQ_BANDS = frozenset({"low", "mid", "hi"})
@@ -290,6 +293,7 @@ def snapshot() -> dict:
         "dj_backend": dj.backend,
         "manual_takeover": bool(dj_cfg.get("manual_takeover", False)),
         "automation": bool(dj_cfg.get("automation", False)),
+        "mixer": mixer.status(),
         "sim": sim_snap,
         "agent": agent.status() if agent else {"running": False},
         "settings": cfg,
@@ -795,6 +799,10 @@ class TakeoverRequest(BaseModel):
     enabled: bool = True
 
 
+class AutomationRequest(BaseModel):
+    enabled: bool = False
+
+
 class DjPlanRequest(BaseModel):
     plan: str = "build"
 
@@ -1163,6 +1171,21 @@ def action_takeover(req: TakeoverRequest, _auth: None = Depends(require_operator
     push_log(f"Manual takeover {'ON' if req.enabled else 'OFF'}")
     publish_state()
     return {"status": "ok", "manual_takeover": bool(req.enabled)}
+
+
+@app.post("/dj/automation")
+def set_dj_automation(req: AutomationRequest, _auth: None = Depends(require_operator)):
+    """Operator toggle for mix automation. Default off; Mixer sends use source=auto."""
+    if is_killed():
+        return {"status": "killed"}
+    enabled = bool(req.enabled)
+    save_settings({"dj": {"automation": enabled}})
+    mixer.enabled = enabled
+    if not enabled:
+        mixer.stop()
+    push_log(f"DJ automation {'ON' if enabled else 'OFF'}")
+    publish_state()
+    return {"status": "ok", "automation": enabled, "mixer": mixer.status()}
 
 
 @app.post("/action/autonomy")

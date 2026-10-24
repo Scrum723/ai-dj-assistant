@@ -23,7 +23,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] C1 — MIDI control layer and fake deck sandbox — per-deck MIDI_MAP, DJController.send gates (kill/automation/takeover), non-blocking play tap, DJ_BACKEND=sim FakeMidiOut+DeckSimulator, /action/{eq,filter,sync,panic,load,takeover}, dashboard MANUAL TAKEOVER
 - [x] C2 — Track analysis v2 — full-track BPM/key/Camelot/beats/phrases/energy; rekordbox XML import; lazy librosa; migration
 - [x] C3 — Next-track selection — selector score/pick (BPM half/double, Camelot, energy plan, recency, request bonus), plans warmup/build/peak/cooldown, GET /dj/next, dashboard top 3 load-to-other-deck, Halo announce respects DJ mode
-- [ ] C4 — Mix engine, replays and transition scoring
+- [x] C4 — Mix engine, replays and transition scoring
 - [ ] C5 — Safety fallback and manual override
 - [ ] D1 — Alpha hardening and launch
 
