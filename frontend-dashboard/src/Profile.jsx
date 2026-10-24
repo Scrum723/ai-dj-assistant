@@ -6,6 +6,7 @@ const PERK_LABELS = {
   room_pass: 'Room pass',
   request_priority: 'Request priority',
   early_chat: 'Early chat',
+  room_mod: 'Room mod',
   operator: 'Operator',
 };
 

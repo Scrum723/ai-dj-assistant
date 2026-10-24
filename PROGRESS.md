@@ -17,7 +17,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] A7 — Regulars, recurring segments and rituals — greeting SM (first/returning/milestone once per show), where_from + favourite_genres memory, segments.py scheduler + Room listening-from/segment UI, community in-jokes ≤1/15m; chat-path request_priority
 - [x] B4 — Adapters with official APIs (Kick, Facebook, Rumble, YouTube official) — webhooks+sig, Graph poll, Rumble poll, YT liveChatMessages+quota/pytchat fallback; Settings health; fixtures
 - [x] B5 — Experimental adapters: TikTok LIVE and X — optional TikTokLive + X replies poll; experimental flags; auto-disable 5/10min; README Platform reality; Settings warning
-- [ ] B6 — Unified moderation and ban sync
+- [x] B6 — Unified moderation and ban sync — community/mod bans by profile or platform+handle, Aggregator drop + delete-message, POST /community/mod/{ban,timeout,unban,delete}, push_bans opt-in, Room mod menu, mod_log; empty SUPPORT_KINDS through Aggregator
 - [ ] B7 — Relay back to platform chats
 - [ ] B8 — Retention hooks and djbotbotty.com front door
 - [ ] C1 — MIDI control layer and fake deck sandbox

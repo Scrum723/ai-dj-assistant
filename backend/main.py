@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from auth import COOKIE, require_operator, user_from_cookie
+from auth import COOKIE, require_operator, require_room_mod, user_from_cookie
 from auth import router as auth_router
 from cohost import CohostAgent
 from community.aggregator import Aggregator
@@ -26,6 +26,7 @@ from community.adapters.x import XAdapter
 from community.adapters.youtube import YouTubeAdapter
 from community.adapters.youtube_official import YouTubeOfficialAdapter
 from community.identity import IdentityStore, get_identity, set_identity
+from community.mod import CommunityMod, get_mod, set_mod
 from community.schema import ChatMessage, ChatUser
 from community.store import CommunityStore, DEFAULT_RETENTION_DAYS
 from dj_controller import DJController, MIDI_MAP
@@ -46,6 +47,7 @@ KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 agent: Optional[CohostAgent] = None
 aggregator: Optional[Aggregator] = None
 community_store: Optional[CommunityStore] = None
+community_mod: Optional[CommunityMod] = None
 speech_queue: asyncio.Queue
 agent_task: Optional[asyncio.Task] = None
 speech_task: Optional[asyncio.Task] = None
@@ -366,7 +368,7 @@ async def presence_worker():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, aggregator, community_store, speech_queue, agent_task, speech_task, presence_task, _main_loop
+    global agent, aggregator, community_store, community_mod, speech_queue, agent_task, speech_task, presence_task, _main_loop
     _main_loop = asyncio.get_running_loop()
     speech_queue = asyncio.Queue(maxsize=12)
     speech_task = asyncio.create_task(speech_worker())
@@ -399,6 +401,14 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("memory attach on link failed")
 
+    community_mod = CommunityMod(
+        db_path=community_store.db_path,
+        get_settings=load_settings,
+        identity=identity_store,
+        broadcast=room_broadcast,
+    )
+    set_mod(community_mod)
+
     aggregator = Aggregator(
         cohost_ingest=agent.ingest,
         note_chat=note_chat,
@@ -406,8 +416,10 @@ async def lifespan(app: FastAPI):
         get_settings=load_settings,
         store=community_store,
         identity=identity_store,
+        mod=community_mod,
         on_linked=_on_linked,
     )
+    community_mod.set_get_adapters(aggregator.adapters_map)
     yt_channel = ""
     community = cfg.get("community") or {}
     adapters_cfg = community.get("adapters") or {}
@@ -1038,6 +1050,129 @@ def community_listening_from():
             "community_name": ((agent._cfg().get("community") or {}).get("name") or "") or None,
         }
     return {"listening_from": [], "current_segment": None, "community_name": None}
+
+
+class ModTargetIn(BaseModel):
+    target_profile_id: Optional[int] = None
+    platform: str = ""
+    handle: str = ""
+    reason: str = ""
+    seconds: Optional[int] = None
+    push: Optional[bool] = None
+
+
+class ModDeleteIn(BaseModel):
+    message_id: str
+    reason: str = ""
+    platform: str = ""
+    handle: str = ""
+    target_profile_id: Optional[int] = None
+
+
+def _mod_or_503() -> CommunityMod:
+    mod = get_mod() or community_mod
+    if not mod:
+        raise HTTPException(503, "moderation offline")
+    return mod
+
+
+@app.post("/community/mod/ban")
+def community_mod_ban(body: ModTargetIn, actor: dict = Depends(require_room_mod)):
+    mod = _mod_or_503()
+    try:
+        return mod.ban(
+            target_profile_id=body.target_profile_id,
+            platform=body.platform,
+            handle=body.handle,
+            until=None,
+            reason=body.reason,
+            by_user_id=actor.get("user_id"),
+            by_name=str(actor.get("display_name") or "mod"),
+            push=body.push,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/community/mod/timeout")
+def community_mod_timeout(body: ModTargetIn, actor: dict = Depends(require_room_mod)):
+    mod = _mod_or_503()
+    secs = int(body.seconds or 600)
+    try:
+        return mod.timeout(
+            seconds=secs,
+            target_profile_id=body.target_profile_id,
+            platform=body.platform,
+            handle=body.handle,
+            reason=body.reason,
+            by_user_id=actor.get("user_id"),
+            by_name=str(actor.get("display_name") or "mod"),
+            push=body.push,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/community/mod/unban")
+def community_mod_unban(body: ModTargetIn, actor: dict = Depends(require_room_mod)):
+    mod = _mod_or_503()
+    try:
+        return mod.unban(
+            target_profile_id=body.target_profile_id,
+            platform=body.platform,
+            handle=body.handle,
+            reason=body.reason,
+            by_user_id=actor.get("user_id"),
+            by_name=str(actor.get("display_name") or "mod"),
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/community/mod/delete")
+def community_mod_delete(body: ModDeleteIn, actor: dict = Depends(require_room_mod)):
+    mod = _mod_or_503()
+    try:
+        result = mod.delete_message(
+            body.message_id,
+            reason=body.reason,
+            by_user_id=actor.get("user_id"),
+            by_name=str(actor.get("display_name") or "mod"),
+            platform=body.platform,
+            handle=body.handle,
+            target_profile_id=body.target_profile_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if aggregator:
+        try:
+            aggregator.drop_from_history(body.message_id)
+        except Exception:
+            logger.exception("drop_from_history failed")
+    return result
+
+
+@app.get("/community/mod/log")
+def community_mod_log(limit: int = 100, _auth: None = Depends(require_operator)):
+    mod = _mod_or_503()
+    return {"log": mod.list_log(limit=limit), "bans": mod.active_bans()}
+
+
+@app.get("/community/mod/me")
+def community_mod_me(djbb_session: Optional[str] = Cookie(default=None, alias=COOKIE)):
+    """Whether the current session can use the room mod menu."""
+    user = user_from_cookie(djbb_session)
+    perks = (user or {}).get("perks") or {}
+    is_mod = bool(perks.get("operator") or perks.get("room_mod"))
+    # Local booth without OPERATOR_KEY mirrors require_room_mod local path
+    if not user and not (os.getenv("OPERATOR_KEY") or "").strip():
+        is_mod = True
+    return {
+        "is_mod": is_mod,
+        "user_id": (user or {}).get("id"),
+        "display_name": (user or {}).get("display_name"),
+        "perks": {"operator": bool(perks.get("operator")), "room_mod": bool(perks.get("room_mod"))},
+    }
 
 
 @app.post("/agent/demo")

@@ -15,7 +15,7 @@ from typing import Any, Optional
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, Cookie, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -131,6 +131,7 @@ def _default_perks() -> dict:
         "room_pass": True,
         "request_priority": False,
         "early_chat": True,
+        "room_mod": False,
         "notes": "Live-stream perks expand after your first show.",
     }
 
@@ -197,6 +198,49 @@ def require_operator(
         return
 
     raise HTTPException(status_code=401, detail="operator auth required")
+
+
+def current_mod_actor(
+    request: Request,
+    x_operator_key: Optional[str] = Header(default=None, alias="X-Operator-Key"),
+    djbb_session: Optional[str] = Cookie(default=None, alias=COOKIE),
+) -> dict[str, Any]:
+    """Return actor dict if operator or room_mod; else raise 401/403."""
+    expected = (os.getenv("OPERATOR_KEY") or "").strip()
+    if expected and x_operator_key and secrets.compare_digest(x_operator_key, expected):
+        return {
+            "user_id": None,
+            "display_name": "operator-key",
+            "perks": {"operator": True, "room_mod": True},
+            "via": "operator_key",
+        }
+
+    user = user_from_cookie(djbb_session)
+    if user:
+        perks = user.get("perks") or {}
+        if bool(perks.get("operator")) or bool(perks.get("room_mod")):
+            return {
+                "user_id": user.get("id"),
+                "display_name": user.get("display_name") or user.get("email") or "mod",
+                "perks": perks,
+                "via": "session",
+            }
+        raise HTTPException(status_code=403, detail="room mod required")
+
+    if not expected and _client_ip(request) in {"127.0.0.1", "::1", "testclient"}:
+        return {
+            "user_id": None,
+            "display_name": "local-operator",
+            "perks": {"operator": True, "room_mod": True},
+            "via": "local",
+        }
+
+    raise HTTPException(status_code=401, detail="mod auth required")
+
+
+def require_room_mod(actor: dict[str, Any] = Depends(current_mod_actor)) -> dict[str, Any]:
+    """FastAPI dependency — room_mod or operator."""
+    return actor
 
 
 class SignupIn(BaseModel):

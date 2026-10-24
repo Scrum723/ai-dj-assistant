@@ -66,6 +66,8 @@ export default function Room({ state, refresh }) {
   const [highlight, setHighlight] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [isMod, setIsMod] = useState(false);
+  const [modMenuId, setModMenuId] = useState(null);
   const seenIds = useRef(new Set());
   const listRef = useRef(null);
   const stickBottom = useRef(true);
@@ -131,6 +133,12 @@ export default function Room({ state, refresh }) {
       } catch {
         /* optional */
       }
+      try {
+        const m = await fetch(`${API}/community/mod/me`, { credentials: 'include' }).then((r) => r.json());
+        if (!cancelled && m?.is_mod) setIsMod(true);
+      } catch {
+        /* optional */
+      }
     })();
     return () => { cancelled = true; };
   }, [absorb, loadHistory]);
@@ -176,6 +184,12 @@ export default function Room({ state, refresh }) {
             .then((r) => r.json())
             .then((s) => { if (s?.supporters) setSupporters(s.supporters); })
             .catch(() => {});
+        }
+        if (msg.type === 'delete-message' && msg.payload?.id) {
+          const mid = msg.payload.id;
+          seenIds.current.delete(mid);
+          setLiveChat((prev) => prev.filter((m) => m.id !== mid));
+          setModMenuId((cur) => (cur === mid ? null : cur));
         }
       };
       ws.onclose = () => {
@@ -261,6 +275,32 @@ export default function Room({ state, refresh }) {
   const wave = async (who) => {
     if (!nick) return;
     await api('/chat', { method: 'POST', body: JSON.stringify({ author: nick, message: `hey ${who}, just waving from the room`, platform: 'room' }) });
+  };
+
+  const modAction = async (action, line) => {
+    if (!isMod || !line) return;
+    const author = line.user?.display_name || line.user?.handle || line.author || '';
+    const handle = line.user?.handle || author;
+    const body = {
+      target_profile_id: line.profile_id ?? undefined,
+      platform: line.platform || '',
+      handle,
+      reason: `${action} from room`,
+      message_id: line.id,
+      seconds: action === 'timeout' ? 600 : undefined,
+    };
+    try {
+      if (action === 'delete') {
+        await api('/community/mod/delete', { method: 'POST', body: JSON.stringify(body) });
+      } else if (action === 'timeout') {
+        await api('/community/mod/timeout', { method: 'POST', body: JSON.stringify(body) });
+      } else if (action === 'ban') {
+        await api('/community/mod/ban', { method: 'POST', body: JSON.stringify(body) });
+      }
+    } catch {
+      /* ignore */
+    }
+    setModMenuId(null);
   };
 
   const title = useMemo(() => {
@@ -396,7 +436,7 @@ export default function Room({ state, refresh }) {
             const supportKind = line.kind && line.kind !== 'chat' ? line.kind : null;
             const supportBg = supportKind ? '#4c1d95' : (author === haloName || platform === 'halo' ? '#3b0764' : '#1f2937');
             return (
-              <div key={line.id || `${line.ts}-${i}`} style={{ padding: 10, borderRadius: 8, background: supportBg, border: supportKind ? '1px solid #c084fc' : undefined }}>
+              <div key={line.id || `${line.ts}-${i}`} style={{ padding: 10, borderRadius: 8, background: supportBg, border: supportKind ? '1px solid #c084fc' : undefined, position: 'relative' }}>
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
                   <PlatformBadge platform={platform} />
                   <strong style={{ color: author === haloName || platform === 'halo' ? '#e9d5ff' : '#6ee7b7' }}>{author}</strong>
@@ -405,8 +445,28 @@ export default function Room({ state, refresh }) {
                       {String(supportKind).replace('_', ' ').toUpperCase()}
                     </span>
                   )}
+                  {isMod && platform !== 'halo' && line.id && (
+                    <button
+                      type="button"
+                      onClick={() => setModMenuId(modMenuId === line.id ? null : line.id)}
+                      style={{ marginLeft: 'auto', ...tiny, fontSize: 11 }}
+                      title="Mod actions"
+                    >
+                      ⋮
+                    </button>
+                  )}
                 </div>
                 <div>{body}</div>
+                {isMod && modMenuId === line.id && (
+                  <div style={{
+                    marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6,
+                    padding: 8, borderRadius: 8, background: '#111827', border: '1px solid #374151',
+                  }}>
+                    <button type="button" style={tiny} onClick={() => modAction('delete', line)}>Delete</button>
+                    <button type="button" style={tiny} onClick={() => modAction('timeout', line)}>Timeout 10m</button>
+                    <button type="button" style={{ ...tiny, background: '#7f1d1d' }} onClick={() => modAction('ban', line)}>Ban</button>
+                  </div>
+                )}
               </div>
             );
           })}

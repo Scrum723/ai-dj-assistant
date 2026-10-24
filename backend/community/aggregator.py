@@ -10,7 +10,7 @@ from collections import OrderedDict, deque
 from typing import Any, Callable, Optional
 
 from community.adapters.base import ChatAdapter
-from community.schema import ChatMessage, ChatUser
+from community.schema import SUPPORT_KINDS, ChatMessage, ChatUser
 from moderation import check_input
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,7 @@ BroadcastFn = Callable[[dict], None]
 # Forward ref for typing without hard import cycle at module load in tests
 StoreLike = Any
 IdentityLike = Any
+ModLike = Any
 
 
 class _LRUSet:
@@ -57,6 +58,7 @@ class Aggregator:
         get_settings: Optional[Callable[[], dict]] = None,
         store: Optional[StoreLike] = None,
         identity: Optional[IdentityLike] = None,
+        mod: Optional[ModLike] = None,
         on_linked: Optional[Callable[[dict], None]] = None,
     ):
         self._adapters: dict[str, ChatAdapter] = {}
@@ -66,6 +68,7 @@ class Aggregator:
         self._get_settings = get_settings or (lambda: {})
         self._store = store
         self._identity = identity
+        self._mod = mod
         self._on_linked = on_linked
         self._dedupe = _LRUSet()
         self._history: deque[ChatMessage] = deque(maxlen=HISTORY_MAX)
@@ -82,11 +85,30 @@ class Aggregator:
     def set_identity(self, identity: Optional[IdentityLike]) -> None:
         self._identity = identity
 
+    def set_mod(self, mod: Optional[ModLike]) -> None:
+        self._mod = mod
+
     def register(self, adapter: ChatAdapter) -> None:
         self._adapters[adapter.name] = adapter
 
     def get_adapter(self, name: str) -> Optional[ChatAdapter]:
         return self._adapters.get(name)
+
+    def adapters_map(self) -> dict[str, ChatAdapter]:
+        return dict(self._adapters)
+
+    def drop_from_history(self, message_id: str) -> bool:
+        """Remove a message from in-memory history (delete-message)."""
+        mid = (message_id or "").strip()
+        if not mid:
+            return False
+        with self._lock:
+            before = len(self._history)
+            self._history = deque(
+                (m for m in self._history if m.id != mid),
+                maxlen=HISTORY_MAX,
+            )
+            return len(self._history) < before
 
     def _apply_adapter_config(self, name: str, adapter: ChatAdapter, acfg: dict) -> None:
         """Push settings fields into known adapters without failing unknown ones."""
@@ -310,10 +332,29 @@ class Aggregator:
         if msg.kind != "system":
             link_handled = self._handle_link_command(msg)
 
+        if self._mod is not None and msg.kind != "system":
+            try:
+                user = msg.user if isinstance(msg.user, ChatUser) else ChatUser()
+                if self._mod.is_banned(
+                    profile_id=msg.profile_id,
+                    platform=msg.platform,
+                    handle=user.handle or user.display_name or "",
+                ):
+                    logger.info("aggregator ban drop id=%s profile=%s", msg.id, msg.profile_id)
+                    return False
+            except Exception:
+                logger.exception("ban check failed")
+
         settings = self._get_settings()
         author = (msg.user.display_name or msg.user.handle or "").strip()
         skip_rate = self._is_operator_author(author, msg.platform, settings)
-        ok, reason = check_input(msg.to_client(), settings=settings, skip_rate=skip_rate)
+        # A6 park: blank Super Chat / gift / member / follow still thank
+        is_support = (msg.kind or "") in SUPPORT_KINDS
+        text_blank = not (msg.text or "").strip()
+        if is_support and text_blank:
+            ok, reason = True, ""
+        else:
+            ok, reason = check_input(msg.to_client(), settings=settings, skip_rate=skip_rate)
         if not ok:
             logger.info("aggregator moderation drop id=%s reason=%s", msg.id, reason)
             return False

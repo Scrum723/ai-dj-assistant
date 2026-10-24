@@ -107,6 +107,7 @@ DEFAULTS = {
         "name": "",
         "in_jokes": [],
         "retention_days": 30,
+        "push_bans": False,
         "adapters": {
             "youtube": {"enabled": False, "channel": ""},
             "twitch": {"enabled": False, "channel": ""},

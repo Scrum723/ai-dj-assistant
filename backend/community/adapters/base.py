@@ -41,6 +41,7 @@ class ChatAdapter(ABC):
 
     name: str = "base"
     can_send: bool = False
+    can_moderate: bool = False
 
     def __init__(self, channel: str = ""):
         self.channel = (channel or "").strip()
@@ -63,6 +64,10 @@ class ChatAdapter(ABC):
     def send(self, text: str) -> None:
         raise NotImplementedError(f"{self.name} adapter cannot send")
 
+    def ban(self, handle: str, seconds: Optional[int] = None) -> None:
+        """Timeout (seconds) or permanent ban when seconds is None. Opt-in via can_moderate."""
+        raise NotImplementedError(f"{self.name} adapter cannot moderate")
+
     def is_ready(self) -> bool:
         """True when adapter has enough config to start (default: non-empty channel)."""
         return bool(self.channel)
@@ -84,6 +89,7 @@ class ChatAdapter(ABC):
             "last_msg_ts": self._last_msg_ts or None,
             "channel": self.channel,
             "can_send": bool(self.can_send),
+            "can_moderate": bool(self.can_moderate),
             "running": bool(self._running),
             "health": health,
             "backoff_sec": round(self._backoff.remaining(), 2),
