@@ -4,3 +4,6 @@ python-dotenv>=1.0
 google-genai>=1.0
 requests>=2.32
 pydantic>=2.0
+
+# Dev / test (optional; not required for cloud)
+# pytest>=8.0

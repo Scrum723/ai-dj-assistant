@@ -5,7 +5,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 
 ## Phases
 
-- [ ] A1 — Halo foundation: tests, LLM provider, per-viewer memory
+- [x] A1 — Halo foundation: tests, LLM provider, per-viewer memory — pytest harness, Gemini/xAI via HALO_PROVIDER, SQLite viewer memory injected into prompts
 - [ ] A2 — Moderation, safety and access control
 - [ ] B1 — Aggregator core + unified room v1
 - [ ] B2 — Room history, presence and live-room UX

@@ -106,6 +106,19 @@ Halo starts with the app. The overlay is her face: she greets people, answers ch
 
 `GEMINI_API_KEY` in `~/.env` makes replies generative. Without it, Halo still talks using local lines.
 
+### Halo LLM / memory env vars
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `HALO_PROVIDER` | `gemini` | LLM backend: `gemini` or `xai` (alias `grok`) |
+| `GEMINI_API_KEY` | — | Required when `HALO_PROVIDER=gemini` for generative replies |
+| `GEMINI_MODEL` | `gemini-3.6-flash` | Gemini model id |
+| `XAI_API_KEY` | — | Required when `HALO_PROVIDER=xai` |
+| `XAI_MODEL` | `grok-2-latest` | xAI model id |
+| `DATA_DIR` | `backend/` | Directory for `halo.db` (viewer memory) and other SQLite files |
+
+Switch providers with `HALO_PROVIDER` only — no code change. Viewer memory persists across restarts in `$DATA_DIR/halo.db`.
+
 Forward chat from another bot (Twitch bridge, etc.):
 
 ```bash

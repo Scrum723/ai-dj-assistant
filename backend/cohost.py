@@ -14,12 +14,14 @@ from typing import Any, Callable, Optional
 
 from dotenv import load_dotenv
 
+from llm import LLMProvider, get_provider
+from memory import ViewerMemory
+
 load_dotenv(os.path.expanduser("~/.env"))
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 AGENT_NAME = "Halo"
 
 PERSONA = (
@@ -61,6 +63,12 @@ WELCOME_LINES = [
     "Hey {name}! Glad you're here. Throw a request in chat if you want in the mix.",
     "What's good {name}? You picked a good time to pull up.",
     "{name} is in the room. Say hey and tell us what you want to hear.",
+]
+RETURNING_LINES = [
+    "Welcome back {name}! Good to see you in the booth again.",
+    "{name} is back — the booth missed you. What are we spinning?",
+    "Hey {name}, glad you returned. Throw a request if you want in the mix.",
+    "Look who pulled up again — what's good {name}?",
 ]
 HYPE_LINES = [
     "That's the energy {name} — let it ride.",
@@ -106,6 +114,8 @@ class CohostAgent:
         note_chat: Callable[[dict], None],
         get_autonomy: Callable[[], int],
         get_settings: Callable[[], dict],
+        memory: Optional[ViewerMemory] = None,
+        llm: Optional[LLMProvider] = None,
     ):
         self.get_snapshot = get_snapshot
         self.search_tracks = search_tracks
@@ -114,6 +124,8 @@ class CohostAgent:
         self.note_chat = note_chat
         self.get_autonomy = get_autonomy
         self.get_settings = get_settings
+        self.memory = memory if memory is not None else ViewerMemory()
+        self._llm = llm if llm is not None else get_provider()
 
         self.running = True
         self.demo = bool(get_settings().get("demo"))
@@ -131,27 +143,14 @@ class CohostAgent:
         self._last_gemini = 0.0
         self._ai_backoff_until = 0.0
         self._last_reply_user: dict[str, float] = {}
+        self._returning: set[str] = set()
         self._inbox: asyncio.Queue = asyncio.Queue()
-        self._ai = None
         self._demo_i = 0
         self._next_demo = 0.0
         self._yt_thread: Optional[threading.Thread] = None
         self._yt_stop = threading.Event()
-        self._init_ai()
-
-    def _init_ai(self):
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            logger.warning("GEMINI_API_KEY missing — Halo will use local lines only.")
-            return
-        try:
-            from google import genai
-
-            self._ai = genai.Client(api_key=api_key)
-            logger.info("Halo Gemini client ready (%s).", GEMINI_MODEL)
-        except Exception as e:
-            logger.error("Gemini init failed: %s", e)
-            self._ai = None
+        if not self._llm.available:
+            logger.warning("Halo LLM unavailable — using local lines only.")
 
     def _cfg(self) -> dict:
         return self.get_settings()
@@ -169,7 +168,7 @@ class CohostAgent:
             "demo": self.demo,
             "mood": "quiet" if halo.get("dj_mode") else self.mood,
             "youtube_id": self.youtube_id,
-            "ai_online": bool(self._ai),
+            "ai_online": bool(self._llm and self._llm.available),
             "last_target": self.last_target,
             "viewer_count": len(self.viewers),
             "viewers": list(self.viewers.keys())[-12:],
@@ -204,6 +203,13 @@ class CohostAgent:
             return
         if author.lower() in IGNORE_USERS:
             return
+        mem_platform = (platform or "chat").strip().lower() or "chat"
+        try:
+            _record, is_returning = self.memory.touch(mem_platform, author)
+            if is_returning:
+                self._returning.add(f"{mem_platform}:{author.lower()}")
+        except Exception:
+            logger.exception("viewer memory touch failed")
         item = {
             "author": author,
             "message": message,
@@ -282,7 +288,7 @@ class CohostAgent:
     async def _handle_chat(self, item: dict, autonomy: int, dj_mode: bool = False, caps: dict | None = None, energy: str = "balanced"):
         author = item["author"]
         message = item["message"]
-        kind = self._classify(author, message)
+        kind = self._classify(author, message, platform=item.get("platform") or "chat")
         self.mood = "listening"
         caps = caps or {}
 
@@ -292,6 +298,10 @@ class CohostAgent:
                 return
             query = self._request_query(message)
             self.requests_handled += 1
+            try:
+                self.memory.remember_request(item.get("platform") or "chat", author, query)
+            except Exception:
+                logger.exception("remember_request failed")
             result = self.enqueue_request(query=query, requester=author, via=item["platform"], silent=True)
             found = result.get("status") == "queued"
             title = self._short_title((result.get("item") or {}).get("filename") or query)
@@ -305,6 +315,7 @@ class CohostAgent:
                     message,
                     fallback=line,
                     hint="They requested a song. Confirm the queue in one short spoken line and say the title.",
+                    platform=item.get("platform") or "chat",
                 )
             if dj_mode:
                 return
@@ -313,7 +324,7 @@ class CohostAgent:
 
         user_key = author.lower()
         last = self._last_reply_user.get(user_key, 0)
-        cooldown = 12 if kind in {"welcome", "question", "mention"} else 28
+        cooldown = 12 if kind in {"welcome", "returning", "question", "mention"} else 28
         if time.time() - last < cooldown and kind not in {"request"}:
             return
 
@@ -323,6 +334,7 @@ class CohostAgent:
         cap_map = {
             "welcome": "greet",
             "new_viewer": "greet",
+            "returning": "greet",
             "question": "questions",
             "mention": "questions",
             "hype": "hype",
@@ -331,7 +343,7 @@ class CohostAgent:
         if not caps.get(cap_map.get(kind, "hype"), True):
             return
 
-        if kind in {"welcome", "question", "mention", "new_viewer"}:
+        if kind in {"welcome", "question", "mention", "new_viewer", "returning"}:
             should = True
         elif kind == "hype":
             should = autonomy >= 35
@@ -345,12 +357,19 @@ class CohostAgent:
         use_ai = (not demo) and energy != "eco" and kind in {"question", "mention"}
         if use_ai:
             hint = "Answer briefly if you can. If not, pivot to the music. Name them once."
-            line = await self._compose(author, message, fallback=fallback, hint=hint)
+            line = await self._compose(
+                author,
+                message,
+                fallback=fallback,
+                hint=hint,
+                platform=item.get("platform") or "chat",
+            )
         else:
             line = fallback
-        mood = "hype" if kind in {"hype", "welcome", "new_viewer"} else "talk"
-        if kind in {"welcome", "new_viewer"}:
+        mood = "hype" if kind in {"hype", "welcome", "new_viewer", "returning"} else "talk"
+        if kind in {"welcome", "new_viewer", "returning"}:
             self.greets += 1
+            self._returning.discard(f"{(item.get('platform') or 'chat').lower()}:{user_key}")
         self._say(line, target=author, mood=mood)
         self._last_reply_user[user_key] = time.time()
 
@@ -382,13 +401,16 @@ class CohostAgent:
             options.extend(FOLLOW_LINES)
         self._say(random.choice(options), mood="idle")
 
-    def _classify(self, author: str, message: str) -> str:
+    def _classify(self, author: str, message: str, platform: str = "chat") -> str:
         if REQUEST_RE.search(message) or message.lower().startswith("!request"):
             return "request"
         if QUESTION_RE.search(message):
             return "question"
         if MENTION_RE.search(message):
             return "mention"
+        mem_key = f"{(platform or 'chat').lower()}:{author.lower()}"
+        if mem_key in self._returning:
+            return "returning"
         is_new = author.lower() not in self._last_reply_user and (time.time() - self.viewers.get(author, 0) < 2)
         if is_new:
             return "welcome" if GREET_RE.search(message) else "new_viewer"
@@ -407,6 +429,8 @@ class CohostAgent:
         return message
 
     def _fallback(self, kind: str, author: str, message: str) -> str:
+        if kind == "returning":
+            return random.choice(RETURNING_LINES).format(name=author)
         if kind in {"welcome", "new_viewer"}:
             return random.choice(WELCOME_LINES).format(name=author)
         if kind == "hype":
@@ -415,48 +439,66 @@ class CohostAgent:
             return f"Good question {author}. Stay with the mix and I'll keep you posted from the booth."
         return f"I hear you {author}. Keep talking — this stream's better when the chat's alive."
 
-    async def _compose(self, author: str, message: str, fallback: str, hint: str) -> str:
+    def _viewer_memory_line(self, author: str, platform: str = "chat") -> str:
+        try:
+            rec = self.memory.get(platform or "chat", author)
+        except Exception:
+            return ""
+        if not rec:
+            return ""
+        return rec.memory_line()
+
+    async def _compose(
+        self,
+        author: str,
+        message: str,
+        fallback: str,
+        hint: str,
+        platform: str = "chat",
+    ) -> str:
         now = time.time()
-        if not self._ai or now < self._ai_backoff_until or now - self._last_gemini < 12:
+        if (
+            not self._llm
+            or not self._llm.available
+            or now < self._ai_backoff_until
+            or now - self._last_gemini < 12
+        ):
             return fallback
         snap = self.get_snapshot()
         track = snap.get("current_track") or {}
         title = self._short_title(track.get("filename") or "nothing loaded")
         halo_name = self._halo_name()
-        recent = "\n".join(f"{c['author']}: {c['message']}" for c in list(self.chat)[-5:] if c.get("author") != halo_name)
-        prompt = (
-            f"{hint}\n"
-            f"Now playing: {title}.\n"
-            f"Recent chat:\n{recent}\n"
-            f"Reply to {author} who said: {message}"
+        recent = "\n".join(
+            f"{c['author']}: {c['message']}"
+            for c in list(self.chat)[-5:]
+            if c.get("author") != halo_name
         )
+        memory_line = self._viewer_memory_line(author, platform)
+        prompt_parts = [
+            hint,
+            f"Now playing: {title}.",
+        ]
+        if memory_line:
+            prompt_parts.append(memory_line)
+        prompt_parts.append(f"Recent chat:\n{recent}")
+        prompt_parts.append(f"Reply to {author} who said: {message}")
+        prompt = "\n".join(prompt_parts)
         try:
-            from google.genai import types
-
             persona = (self._cfg().get("halo") or {}).get("persona") or PERSONA
 
             def _call():
-                return self._ai.models.generate_content(
-                    model=GEMINI_MODEL,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=persona,
-                        temperature=0.8,
-                        max_output_tokens=120,
-                        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                    ),
-                )
+                return self._llm.generate(persona, prompt, max_tokens=120)
 
             self._last_gemini = now
-            response = await asyncio.to_thread(_call)
-            text = (getattr(response, "text", None) or "").strip()
+            text = await asyncio.to_thread(_call)
+            text = (text or "").strip()
             text = re.sub(r"https?://\S+", "", text)
             text = re.sub(r"[#*_`]+", "", text).strip()
             if text and len(text) > 12:
                 return text[:280]
         except Exception as e:
             err = str(e)
-            logger.error("Halo Gemini reply failed: %s", e)
+            logger.error("Halo LLM reply failed: %s", e)
             if "429" in err or "RESOURCE_EXHAUSTED" in err:
                 self._ai_backoff_until = time.time() + 75
         return fallback
