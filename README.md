@@ -115,10 +115,17 @@ Halo starts with the app. The overlay is her face: she greets people, answers ch
 | `GEMINI_MODEL` | `gemini-3.6-flash` | Gemini model id |
 | `XAI_API_KEY` | — | Required when `HALO_PROVIDER=xai` |
 | `XAI_MODEL` | `grok-2-latest` | xAI model id |
-| `DATA_DIR` | `backend/` | Directory for `halo.db` (viewer memory) and other SQLite files |
+| `HALO_COST_PER_1K` | `0.0001` | Estimated USD per 1k tokens for `/metrics` |
+| `HALO_DAILY_CALL_CAP` | unset | When set, Halo uses fallbacks after this many LLM calls/day |
+| `DATA_DIR` | `backend/` | Directory for `halo.db`, `community.db`, `users.db` |
 | `OPERATOR_KEY` | unset | Shared secret for booth control. Send as header `X-Operator-Key`. Required in cloud; when unset, `127.0.0.1` may call `/action/*`, `POST /settings`, `/agent/*`, `/sentinel/*` without a key. Dashboard reads the key from `localStorage.operatorKey`. |
+| `YOUTUBE_LIVE_VIDEO_ID` | unset | Optional default YouTube live id (adapters still off until enabled in settings) |
+| `ELEVENLABS_API_KEY` | unset | Optional TTS; falls through to macOS `say` / browser speech |
+| `COOKIE_SECURE` | — | Set `true` on Railway / HTTPS |
 
-Switch providers with `HALO_PROVIDER` only — no code change. Viewer memory persists across restarts in `$DATA_DIR/halo.db`.
+Switch providers with `HALO_PROVIDER` only — no code change. Viewer memory persists in `$DATA_DIR/halo.db`; room history in `$DATA_DIR/community.db`. Full template: `.env.example`.
+
+**Local run (this PC):** use `.venv\Scripts\python.exe` and `python -m pytest -q` from the repo root. Cloud boot uses `requirements-cloud.txt` (no MIDI / no librosa).
 
 ### Moderation / kill switch
 
