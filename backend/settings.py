@@ -29,6 +29,7 @@ DEFAULTS = {
         "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
         "dj_mode": False,
         "listen_mic": False,
+        "operator_handles": ["charles", "charlesclottin"],
         "capabilities": {
             "greet": True,
             "requests": True,
@@ -57,6 +58,9 @@ DEFAULTS = {
     "demo": False,
     "youtube_id": "",
     "autonomy": 70,
+    "moderation": {
+        "blocklist": [],
+    },
     "streams": {
         "youtube": "https://www.youtube.com/@theweathermandj/live",
         "x": "https://x.com/charlesclottin",

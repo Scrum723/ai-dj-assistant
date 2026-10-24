@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 
 from llm import LLMProvider, get_provider
 from memory import ViewerMemory
+from moderation import check_input, check_output, mute, unmute
+from sentinel import is_killed
 
 load_dotenv(os.path.expanduser("~/.env"))
 load_dotenv()
@@ -23,6 +25,12 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "Halo"
+
+MUTE_RE = re.compile(r"^!mute\s+(\S+)\s*$", re.I)
+UNMUTE_RE = re.compile(r"^!unmute\s+(\S+)\s*$", re.I)
+HALO_QUIET_RE = re.compile(r"^!halo\s+quiet\s*$", re.I)
+HALO_ON_RE = re.compile(r"^!halo\s+on\s*$", re.I)
+DEFAULT_OPERATOR_HANDLES = ("charles", "charlesclottin")
 
 PERSONA = (
     "You are Halo, the LLM DJ buddy inside DJ Bot Botty "
@@ -149,6 +157,7 @@ class CohostAgent:
         self._next_demo = 0.0
         self._yt_thread: Optional[threading.Thread] = None
         self._yt_stop = threading.Event()
+        self.quiet = False
         if not self._llm.available:
             logger.warning("Halo LLM unavailable — using local lines only.")
 
@@ -180,6 +189,8 @@ class CohostAgent:
             "energy_mode": env.get("energy_mode") or "balanced",
             "vibe": env.get("vibe") or "night",
             "listen_mic": bool(halo.get("listen_mic")),
+            "quiet": bool(self.quiet),
+            "killed": bool(is_killed()),
         }
 
     def stop(self):
@@ -196,6 +207,42 @@ class CohostAgent:
             self._yt_stop = threading.Event()
             self._start_youtube()
 
+    def _operator_handles(self) -> set[str]:
+        raw = (self._cfg().get("halo") or {}).get("operator_handles")
+        if isinstance(raw, list) and raw:
+            return {str(h).strip().lower() for h in raw if str(h).strip()}
+        return set(DEFAULT_OPERATOR_HANDLES)
+
+    def _is_operator(self, author: str, platform: str = "chat") -> bool:
+        if (author or "").strip().lower() in self._operator_handles():
+            return True
+        # Dashboard "Talk to Halo" is the booth operator console
+        return (platform or "").strip().lower() == "dashboard"
+
+    def _handle_operator_command(self, author: str, message: str, platform: str) -> bool:
+        if not self._is_operator(author, platform):
+            return False
+        text = (message or "").strip()
+        m = MUTE_RE.match(text)
+        if m:
+            mute(m.group(1))
+            self._say(f"Muted {m.group(1)}.", mood="talk")
+            return True
+        m = UNMUTE_RE.match(text)
+        if m:
+            unmute(m.group(1))
+            self._say(f"Unmuted {m.group(1)}.", mood="talk")
+            return True
+        if HALO_QUIET_RE.match(text):
+            self.quiet = True
+            self._say("Going quiet.", mood="talk")
+            return True
+        if HALO_ON_RE.match(text):
+            self.quiet = False
+            self._say("Back on.", mood="talk")
+            return True
+        return False
+
     def ingest(self, author: str, message: str, platform: str = "chat"):
         author = (author or "Fan").strip()[:40]
         message = (message or "").strip()[:280]
@@ -203,6 +250,15 @@ class CohostAgent:
             return
         if author.lower() in IGNORE_USERS:
             return
+
+        if self._handle_operator_command(author, message, platform):
+            return
+
+        ok, reason = check_input(author, message, settings=self._cfg())
+        if not ok:
+            logger.info("moderation drop author=%s reason=%s", author, reason)
+            return
+
         mem_platform = (platform or "chat").strip().lower() or "chat"
         try:
             _record, is_returning = self.memory.touch(mem_platform, author)
@@ -251,6 +307,8 @@ class CohostAgent:
             await asyncio.sleep(0.55 if energy == "eco" else 0.3)
 
     async def _tick(self):
+        if is_killed():
+            return
         cfg = self._cfg()
         halo = cfg.get("halo") or {}
         env = cfg.get("environment") or {}
@@ -264,19 +322,25 @@ class CohostAgent:
             item = self._inbox.get_nowait()
         except asyncio.QueueEmpty:
             item = None
-        if item:
+        if item and not self.quiet:
             await self._handle_chat(item, autonomy, dj_mode=dj_mode, caps=caps, energy=energy)
 
-        if dj_mode or not caps.get("idle_talk", True) or energy == "eco":
+        if self.quiet or dj_mode or not caps.get("idle_talk", True) or energy == "eco":
             idle_every = 120.0
         else:
             base = {"balanced": 42.0, "show": 20.0}.get(energy, 42.0)
             idle_every = max(16.0, base * (1.35 - distraction / 140.0))
-        if (not dj_mode) and caps.get("idle_talk", True) and now - self._last_idle >= idle_every and self._inbox.empty():
+        if (
+            (not self.quiet)
+            and (not dj_mode)
+            and caps.get("idle_talk", True)
+            and now - self._last_idle >= idle_every
+            and self._inbox.empty()
+        ):
             self._idle_line(autonomy, caps)
             self._last_idle = now
 
-        demo_ok = self.demo and energy != "eco" and not dj_mode
+        demo_ok = self.demo and energy != "eco" and not dj_mode and not self.quiet
         if demo_ok and now - self.last_real_chat > 25:
             gap = 32.0 + random.uniform(0, 14)
             if now >= self._next_demo:
@@ -491,11 +555,10 @@ class CohostAgent:
 
             self._last_gemini = now
             text = await asyncio.to_thread(_call)
-            text = (text or "").strip()
-            text = re.sub(r"https?://\S+", "", text)
-            text = re.sub(r"[#*_`]+", "", text).strip()
-            if text and len(text) > 12:
-                return text[:280]
+            cleaned = check_output(text, settings=self._cfg())
+            if cleaned and len(cleaned) > 12:
+                return cleaned
+            return fallback
         except Exception as e:
             err = str(e)
             logger.error("Halo LLM reply failed: %s", e)
@@ -504,9 +567,15 @@ class CohostAgent:
         return fallback
 
     def _say(self, text: str, target: Optional[str] = None, mood: str = "talk"):
+        if is_killed():
+            return
         text = (text or "").strip()
         if not text:
             return
+        cleaned = check_output(text, settings=self._cfg())
+        if not cleaned:
+            return
+        text = cleaned
         self.mood = "speaking"
         self.last_target = target
         self.replies += 1

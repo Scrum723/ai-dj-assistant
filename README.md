@@ -116,8 +116,13 @@ Halo starts with the app. The overlay is her face: she greets people, answers ch
 | `XAI_API_KEY` | — | Required when `HALO_PROVIDER=xai` |
 | `XAI_MODEL` | `grok-2-latest` | xAI model id |
 | `DATA_DIR` | `backend/` | Directory for `halo.db` (viewer memory) and other SQLite files |
+| `OPERATOR_KEY` | unset | Shared secret for booth control. Send as header `X-Operator-Key`. Required in cloud; when unset, `127.0.0.1` may call `/action/*`, `POST /settings`, `/agent/*`, `/sentinel/*` without a key. Dashboard reads the key from `localStorage.operatorKey`. |
 
 Switch providers with `HALO_PROVIDER` only — no code change. Viewer memory persists across restarts in `$DATA_DIR/halo.db`.
+
+### Moderation / kill switch
+
+Halo drops blocked words, links, caps/char floods, and rate-limited spam before they reach the LLM or TTS. Operator chat commands (from `halo.operator_handles` or the dashboard): `!mute <name>`, `!unmute <name>`, `!halo quiet`, `!halo on`. `POST /sentinel/kill-ours` freezes speech and `/action/*` (returns `{"status":"killed"}`); `POST /sentinel/resume` clears it.
 
 Forward chat from another bot (Twitch bridge, etc.):
 

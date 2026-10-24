@@ -16,7 +16,20 @@ if str(BACKEND) not in sys.path:
 # Offline tests — never call real providers
 os.environ.pop("GEMINI_API_KEY", None)
 os.environ.pop("XAI_API_KEY", None)
+os.environ.pop("OPERATOR_KEY", None)
 os.environ.setdefault("HALO_PROVIDER", "gemini")
+
+
+@pytest.fixture(autouse=True)
+def _reset_moderation_and_kill():
+    from moderation import reset_rate_limits
+    from sentinel import set_killed
+
+    reset_rate_limits()
+    set_killed(False)
+    yield
+    reset_rate_limits()
+    set_killed(False)
 
 
 class FakeLLM:

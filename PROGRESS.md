@@ -6,7 +6,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 ## Phases
 
 - [x] A1 — Halo foundation: tests, LLM provider, per-viewer memory — pytest harness, Gemini/xAI via HALO_PROVIDER, SQLite viewer memory injected into prompts
-- [ ] A2 — Moderation, safety and access control
+- [x] A2 — Moderation, safety and access control — input/output filters, rate limits, kill/resume, OPERATOR_KEY auth, operator chat commands
 - [ ] B1 — Aggregator core + unified room v1
 - [ ] B2 — Room history, presence and live-room UX
 - [ ] A3 — Halo speaks to the merged room, with cost and latency controls

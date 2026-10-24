@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Cookie, HTTPException, Request, Response
+from fastapi import APIRouter, Cookie, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
@@ -114,6 +114,35 @@ def user_from_cookie(token: Optional[str]) -> Optional[dict[str, Any]]:
     ).fetchone()
     conn.close()
     return _public(row) if row else None
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client:
+        return request.client.host or ""
+    return ""
+
+
+def require_operator(
+    request: Request,
+    x_operator_key: Optional[str] = Header(default=None, alias="X-Operator-Key"),
+    djbb_session: Optional[str] = Cookie(default=None, alias=COOKIE),
+) -> None:
+    """Allow booth control when operator key, operator perk, or local unsigned booth."""
+    expected = (os.getenv("OPERATOR_KEY") or "").strip()
+    if expected and x_operator_key and secrets.compare_digest(x_operator_key, expected):
+        return
+
+    user = user_from_cookie(djbb_session)
+    if user and bool((user.get("perks") or {}).get("operator")):
+        return
+
+    if not expected and _client_ip(request) in {"127.0.0.1", "::1", "testclient"}:
+        return
+
+    raise HTTPException(status_code=401, detail="operator auth required")
 
 
 class SignupIn(BaseModel):

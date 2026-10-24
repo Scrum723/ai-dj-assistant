@@ -6,15 +6,17 @@ import sqlite3
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from auth import require_operator
 from auth import router as auth_router
 from cohost import CohostAgent
 from dj_controller import DJController, MIDI_MAP
+from sentinel import is_killed
 from sentinel import router as sentinel_router
 from settings import load as load_settings
 from settings import public_settings, save as save_settings
@@ -250,6 +252,8 @@ def enqueue_request(query: str, requester: str, via: str, silent: bool = False) 
 async def speech_worker():
     while True:
         item = await speech_queue.get()
+        if is_killed():
+            continue
         text = item["text"]
         cfg = load_settings()
         if (cfg.get("halo") or {}).get("dj_mode"):
@@ -398,7 +402,7 @@ def get_settings_route():
 
 
 @app.post("/settings")
-def update_settings_route(patch: dict):
+def update_settings_route(patch: dict, _auth: None = Depends(require_operator)):
     current = load_settings()
     halo_patch = patch.get("halo") if isinstance(patch.get("halo"), dict) else None
     if halo_patch is not None:
@@ -431,7 +435,7 @@ def voice_file(name: str):
 
 
 @app.post("/agent/dj")
-def set_dj_mode(req: DjModeRequest):
+def set_dj_mode(req: DjModeRequest, _auth: None = Depends(require_operator)):
     data = save_settings({"halo": {"dj_mode": req.enabled}})
     publish_state()
     return {"dj_mode": data["halo"]["dj_mode"]}
@@ -455,7 +459,9 @@ def search_song(query: str):
 
 
 @app.post("/action/play")
-def play_deck(req: DeckRequest):
+def play_deck(req: DeckRequest, _auth: None = Depends(require_operator)):
+    if is_killed():
+        return {"status": "killed"}
     dj.deck_play_pause(deck=req.deck)
     if not state["current_track"]:
         queue = state["queue"]
@@ -472,7 +478,9 @@ def play_deck(req: DeckRequest):
 
 
 @app.post("/action/skip")
-def skip_track():
+def skip_track(_auth: None = Depends(require_operator)):
+    if is_killed():
+        return {"status": "killed"}
     if state["queue"]:
         item = state["queue"].pop(0)
         state["current_track"] = item.get("track") or item
@@ -487,7 +495,9 @@ def skip_track():
 
 
 @app.post("/action/load")
-def load_track(req: LoadTrackRequest):
+def load_track(req: LoadTrackRequest, _auth: None = Depends(require_operator)):
+    if is_killed():
+        return {"status": "killed"}
     tracks = [t for t in all_tracks() if t["id"] == req.track_id]
     if not tracks:
         return {"error": "Track not found"}
@@ -498,7 +508,9 @@ def load_track(req: LoadTrackRequest):
 
 
 @app.post("/action/crossfade")
-def crossfade(req: CrossfadeRequest):
+def crossfade(req: CrossfadeRequest, _auth: None = Depends(require_operator)):
+    if is_killed():
+        return {"status": "killed"}
     dj.crossfader(req.value)
     state["crossfader"] = req.value
     publish_state()
@@ -506,7 +518,9 @@ def crossfade(req: CrossfadeRequest):
 
 
 @app.post("/action/autonomy")
-def set_autonomy(req: AutonomyRequest):
+def set_autonomy(req: AutonomyRequest, _auth: None = Depends(require_operator)):
+    if is_killed():
+        return {"status": "killed"}
     state["autonomy"] = req.value
     save_settings({"autonomy": req.value})
     publish_state()
@@ -536,7 +550,7 @@ def incoming_chat(req: ChatIn):
 
 
 @app.post("/agent/demo")
-def set_demo(req: DemoRequest):
+def set_demo(req: DemoRequest, _auth: None = Depends(require_operator)):
     if not agent:
         return {"error": "cohost offline"}
     agent.set_demo(req.enabled)
@@ -546,7 +560,7 @@ def set_demo(req: DemoRequest):
 
 
 @app.post("/agent/youtube")
-def set_youtube(req: YoutubeRequest):
+def set_youtube(req: YoutubeRequest, _auth: None = Depends(require_operator)):
     if not agent:
         return {"error": "cohost offline"}
     agent.set_youtube(req.video_id)
