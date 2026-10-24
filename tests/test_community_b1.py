@@ -151,6 +151,18 @@ def test_community_status_adapters_disabled_by_default():
         assert tw.get("enabled") is False
 
 
+def _recv_until(ws, typ: str, attempts: int = 50):
+    got = None
+    for _ in range(attempts):
+        try:
+            got = ws.receive_json()
+            if got.get("type") == typ:
+                return got
+        except Exception:
+            time.sleep(0.05)
+    return got
+
+
 def test_ws_room_broadcast():
     import main
     from community.schema import ChatMessage, ChatUser
@@ -158,8 +170,9 @@ def test_ws_room_broadcast():
     reset_rate_limits()
     with TestClient(main.app) as client:
         with client.websocket_connect("/ws/room") as ws:
-            first = ws.receive_json()
-            assert first["type"] in ("history", "chat")
+            first = _recv_until(ws, "history")
+            assert first is not None
+            assert first["type"] in ("history", "chat", "presence")
 
             msg = ChatMessage(
                 id=f"youtube:ws-{time.time()}",
@@ -171,14 +184,7 @@ def test_ws_room_broadcast():
             )
             assert main.aggregator is not None
             assert main.aggregator.ingest(msg) is True
-            got = None
-            for _ in range(50):
-                try:
-                    got = ws.receive_json()
-                    if got.get("type") == "chat":
-                        break
-                except Exception:
-                    time.sleep(0.05)
+            got = _recv_until(ws, "chat")
             assert got is not None
             assert got["type"] == "chat"
             assert got["payload"]["platform"] == "youtube"
@@ -192,14 +198,15 @@ def test_post_chat_goes_through_aggregator():
     reset_rate_limits()
     with TestClient(app) as client:
         with client.websocket_connect("/ws/room") as ws:
-            _ = ws.receive_json()  # history
+            _ = _recv_until(ws, "history")
             r = client.post(
                 "/chat",
                 json={"author": "BoothFan", "message": "hello unified room", "platform": "room"},
             )
             assert r.status_code == 200
             assert r.json().get("status") == "ok"
-            got = ws.receive_json()
+            got = _recv_until(ws, "chat")
+            assert got is not None
             assert got["type"] == "chat"
             assert got["payload"]["platform"] == "room"
             assert got["payload"]["user"]["handle"] == "BoothFan"

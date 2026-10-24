@@ -69,6 +69,7 @@ DEFAULTS = {
         "rumble": "https://rumble.com/c/charlesclottin",
     },
     "community": {
+        "retention_days": 30,
         "adapters": {
             "youtube": {"enabled": False, "channel": ""},
             "twitch": {"enabled": False, "channel": ""},

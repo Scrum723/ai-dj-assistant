@@ -8,7 +8,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] A1 — Halo foundation: tests, LLM provider, per-viewer memory — pytest harness, Gemini/xAI via HALO_PROVIDER, SQLite viewer memory injected into prompts
 - [x] A2 — Moderation, safety and access control — input/output filters, rate limits, kill/resume, OPERATOR_KEY auth, operator chat commands
 - [x] B1 — Aggregator core + unified room v1 — ChatMessage schema, YouTube/Twitch adapters, Aggregator dedupe+moderation fan-out, /ws/room, Room+overlay badges; adapters disabled by default
-- [ ] B2 — Room history, presence and live-room UX
+- [x] B2 — Room history, presence and live-room UX — SQLite scrollback + retention, presence per platform + room sockets, Room.jsx filters/reconnect/dedupe
 - [ ] A3 — Halo speaks to the merged room, with cost and latency controls
 - [ ] A4 — Persona, voice and DJ mode
 - [ ] A5 — Priority queue and Halo Waiting Room 24/7 mode

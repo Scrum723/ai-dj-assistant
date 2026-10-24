@@ -22,6 +22,10 @@ CohostIngestFn = Callable[..., None]
 BroadcastFn = Callable[[dict], None]
 
 
+# Forward ref for typing without hard import cycle at module load in tests
+StoreLike = Any
+
+
 class _LRUSet:
     def __init__(self, maxlen: int = DEDUPE_MAX):
         self.maxlen = maxlen
@@ -48,16 +52,25 @@ class Aggregator:
         note_chat: Optional[NoteChatFn] = None,
         room_broadcast: Optional[BroadcastFn] = None,
         get_settings: Optional[Callable[[], dict]] = None,
+        store: Optional[StoreLike] = None,
     ):
         self._adapters: dict[str, ChatAdapter] = {}
         self._cohost_ingest = cohost_ingest
         self._note_chat = note_chat
         self._room_broadcast = room_broadcast
         self._get_settings = get_settings or (lambda: {})
+        self._store = store
         self._dedupe = _LRUSet()
         self._history: deque[ChatMessage] = deque(maxlen=HISTORY_MAX)
         self._lock = threading.Lock()
         self._started = False
+
+    @property
+    def store(self) -> Optional[StoreLike]:
+        return self._store
+
+    def set_store(self, store: Optional[StoreLike]) -> None:
+        self._store = store
 
     def register(self, adapter: ChatAdapter) -> None:
         self._adapters[adapter.name] = adapter
@@ -132,6 +145,12 @@ class Aggregator:
 
         with self._lock:
             self._history.append(msg)
+
+        if self._store is not None:
+            try:
+                self._store.insert_message(msg)
+            except Exception:
+                logger.exception("community store persist failed id=%s", msg.id)
 
         client = msg.to_client()
         legacy = msg.to_legacy()

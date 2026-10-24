@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from './api.js';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { api, API } from './api.js';
 import StreamLinks from './StreamLinks.jsx';
 
 function nickKey() {
@@ -24,6 +24,8 @@ const BADGE = {
   halo: { label: 'HALO', color: '#c4b5fd' },
 };
 
+const FILTERS = ['all', 'youtube', 'twitch', 'room', 'halo'];
+
 function PlatformBadge({ platform }) {
   const b = BADGE[platform] || { label: (platform || '?').slice(0, 3).toUpperCase(), color: '#6b7280' };
   return (
@@ -34,6 +36,20 @@ function PlatformBadge({ platform }) {
   );
 }
 
+function mergeById(existing, incoming, { prepend = false } = {}) {
+  const seen = new Set(existing.map((m) => m.id).filter(Boolean));
+  const added = [];
+  for (const item of incoming) {
+    if (!item) continue;
+    if (item.id && seen.has(item.id)) continue;
+    if (item.id) seen.add(item.id);
+    added.push(item);
+  }
+  if (!added.length) return existing;
+  const next = prepend ? [...added, ...existing] : [...existing, ...added];
+  return next.slice(-500);
+}
+
 export default function Room({ state, refresh }) {
   const agent = state?.agent || {};
   const settings = state?.settings || {};
@@ -42,18 +58,73 @@ export default function Room({ state, refresh }) {
   const [text, setText] = useState('');
   const [mode, setMode] = useState('chat');
   const [liveChat, setLiveChat] = useState([]);
+  const [filter, setFilter] = useState('all');
+  const [presence, setPresence] = useState({ counts: {}, total: 0 });
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const seenIds = useRef(new Set());
+  const listRef = useRef(null);
+  const stickBottom = useRef(true);
+  const historyLoaded = useRef(false);
 
   useEffect(() => {
     if (joined && nick) localStorage.setItem(nickKey(), nick);
   }, [joined, nick]);
 
+  const absorb = useCallback((items, { prepend = false } = {}) => {
+    if (!items?.length) return;
+    const fresh = [];
+    for (const item of items) {
+      if (!item) continue;
+      if (item.id && seenIds.current.has(item.id)) continue;
+      if (item.id) seenIds.current.add(item.id);
+      fresh.push(item);
+    }
+    if (!fresh.length) return;
+    setLiveChat((prev) => mergeById(prev, fresh, { prepend }));
+  }, []);
+
+  const loadHistory = useCallback(async (before) => {
+    const q = new URLSearchParams({ limit: '100' });
+    if (before != null) q.set('before', String(before));
+    const res = await fetch(`${API}/community/history?${q}`);
+    if (!res.ok) throw new Error('history failed');
+    const body = await res.json();
+    return body.messages || [];
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const msgs = await loadHistory();
+        if (cancelled) return;
+        absorb(msgs);
+        historyLoaded.current = true;
+        setHasMore(msgs.length >= 100);
+      } catch {
+        /* ws history is fallback */
+      }
+      try {
+        const p = await fetch(`${API}/community/presence`).then((r) => r.json());
+        if (!cancelled && p) setPresence(p);
+      } catch {
+        /* optional */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [absorb, loadHistory]);
+
   useEffect(() => {
     let ws;
     let closed = false;
+    let attempt = 0;
+    let timer;
+
     const connect = () => {
       if (closed) return;
       ws = new WebSocket(roomWsUrl());
+      ws.onopen = () => { attempt = 0; };
       ws.onmessage = (event) => {
         let msg;
         try {
@@ -62,32 +133,72 @@ export default function Room({ state, refresh }) {
           return;
         }
         if (msg.type === 'history' && Array.isArray(msg.payload)) {
-          const next = [];
-          for (const item of msg.payload) {
-            if (item?.id && seenIds.current.has(item.id)) continue;
-            if (item?.id) seenIds.current.add(item.id);
-            next.push(item);
-          }
-          setLiveChat(next);
+          // Merge — never wipe live transcript on reconnect
+          absorb(msg.payload);
+          return;
+        }
+        if (msg.type === 'presence' && msg.payload) {
+          setPresence(msg.payload);
           return;
         }
         if (msg.type === 'chat' && msg.payload) {
           const item = msg.payload;
           if (item.id && seenIds.current.has(item.id)) return;
           if (item.id) seenIds.current.add(item.id);
-          setLiveChat((prev) => [...prev, item].slice(-200));
+          stickBottom.current = true;
+          setLiveChat((prev) => mergeById(prev, [item]));
         }
       };
       ws.onclose = () => {
-        if (!closed) setTimeout(connect, 2000);
+        if (closed) return;
+        const delay = Math.min(30000, 1000 * (2 ** Math.min(attempt, 5)));
+        attempt += 1;
+        timer = setTimeout(connect, delay);
       };
     };
     connect();
     return () => {
       closed = true;
+      clearTimeout(timer);
       if (ws) ws.close();
     };
-  }, []);
+  }, [absorb]);
+
+  const onScroll = async () => {
+    const el = listRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+    stickBottom.current = nearBottom;
+    if (el.scrollTop > 40 || loadingMore || !hasMore || !liveChat.length) return;
+    setLoadingMore(true);
+    const oldest = liveChat[0]?.ts;
+    const prevHeight = el.scrollHeight;
+    try {
+      const older = await loadHistory(oldest);
+      if (!older.length) {
+        setHasMore(false);
+      } else {
+        absorb(older, { prepend: true });
+        setHasMore(older.length >= 100);
+        requestAnimationFrame(() => {
+          if (listRef.current) {
+            listRef.current.scrollTop = listRef.current.scrollHeight - prevHeight;
+          }
+        });
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (el && stickBottom.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [liveChat]);
 
   const viewers = agent.viewers || [];
   const fallbackChat = agent.chat || [];
@@ -98,9 +209,11 @@ export default function Room({ state, refresh }) {
     text: line.message,
     ts: line.ts,
   }));
+  const filtered = filter === 'all' ? chat : chat.filter((m) => (m.platform || 'room') === filter);
   const track = state?.current_track;
   const haloName = agent.name || 'Halo';
   const room = settings.room || {};
+  const counts = presence.counts || {};
 
   const send = async () => {
     if (!text.trim() || !nick.trim()) return;
@@ -149,6 +262,18 @@ export default function Room({ state, refresh }) {
           <div style={{ color: '#c4b5fd', fontSize: 12, letterSpacing: 1.4, fontWeight: 700, marginBottom: 8 }}>WATCH LIVE</div>
           <StreamLinks settings={settings} compact />
         </div>
+        <div style={{ color: '#c4b5fd', fontSize: 12, letterSpacing: 1.4, fontWeight: 700 }}>
+          ONLINE ({presence.total ?? 0})
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '10px 0 14px' }}>
+          {Object.entries(counts).map(([plat, n]) => (
+            <span key={plat} style={countChip}>
+              <PlatformBadge platform={plat} />
+              {n}
+            </span>
+          ))}
+          {!Object.keys(counts).length && <span style={{ color: '#6b7280', fontSize: 13 }}>Nobody yet</span>}
+        </div>
         <div style={{ color: '#c4b5fd', fontSize: 12, letterSpacing: 1.4, fontWeight: 700 }}>IN THE ROOM ({viewers.length})</div>
         <ul style={{ listStyle: 'none', padding: 0, marginTop: 10 }}>
           {viewers.map((v) => (
@@ -160,8 +285,29 @@ export default function Room({ state, refresh }) {
         </ul>
       </aside>
       <section style={{ ...card, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 420 }}>
-          {chat.map((line, i) => {
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+          {FILTERS.map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => setFilter(f)}
+              style={{
+                padding: '6px 10px', borderRadius: 999, border: 'none', cursor: 'pointer',
+                background: filter === f ? '#7c3aed' : '#374151', color: 'white',
+                fontWeight: 700, fontSize: 12, textTransform: 'uppercase',
+              }}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+        <div
+          ref={listRef}
+          onScroll={onScroll}
+          style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 420 }}
+        >
+          {loadingMore && <div style={{ color: '#9ca3af', fontSize: 12, textAlign: 'center' }}>Loading older…</div>}
+          {filtered.map((line, i) => {
             const author = line.user?.display_name || line.user?.handle || line.author || 'Fan';
             const body = line.text ?? line.message ?? '';
             const platform = line.platform || 'room';
@@ -228,4 +374,8 @@ const urlBtn = {
   display: 'block', width: '100%', textAlign: 'left', marginTop: 6, padding: '8px 10px',
   border: '1px solid #374151', borderRadius: 6, background: '#1f2937', color: '#e5e7eb',
   cursor: 'pointer', fontSize: 12, wordBreak: 'break-all'
+};
+const countChip = {
+  display: 'inline-flex', alignItems: 'center', gap: 2, padding: '4px 8px',
+  borderRadius: 8, background: '#111827', fontSize: 13, color: '#e5e7eb',
 };

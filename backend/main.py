@@ -3,6 +3,7 @@ import logging
 import os
 import socket
 import sqlite3
+import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
@@ -19,6 +20,7 @@ from community.aggregator import Aggregator
 from community.adapters.twitch import TwitchAdapter
 from community.adapters.youtube import YouTubeAdapter
 from community.schema import ChatMessage
+from community.store import CommunityStore, DEFAULT_RETENTION_DAYS
 from dj_controller import DJController, MIDI_MAP
 from sentinel import is_killed
 from sentinel import router as sentinel_router
@@ -36,9 +38,11 @@ KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 agent: Optional[CohostAgent] = None
 aggregator: Optional[Aggregator] = None
+community_store: Optional[CommunityStore] = None
 speech_queue: asyncio.Queue
 agent_task: Optional[asyncio.Task] = None
 speech_task: Optional[asyncio.Task] = None
+presence_task: Optional[asyncio.Task] = None
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
@@ -293,14 +297,52 @@ async def speech_worker():
         await asyncio.sleep(min(14.0, max(3.5, words * 0.38 + 1.1)))
 
 
+def _retention_days(cfg: Optional[dict] = None) -> int:
+    cfg = cfg if cfg is not None else load_settings()
+    community = cfg.get("community") or {}
+    try:
+        return max(1, int(community.get("retention_days") or DEFAULT_RETENTION_DAYS))
+    except (TypeError, ValueError):
+        return DEFAULT_RETENTION_DAYS
+
+
+def presence_payload() -> dict:
+    sockets = len(room_hub.clients)
+    if community_store:
+        return community_store.presence(room_sockets=sockets)
+    return {
+        "ts": time.time(),
+        "ttl_sec": 300.0,
+        "counts": {"room": sockets},
+        "users": [],
+        "total": sockets,
+    }
+
+
+async def presence_worker():
+    while True:
+        try:
+            await asyncio.sleep(10.0)
+            room_broadcast({"type": "presence", "payload": presence_payload()})
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("presence broadcast failed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, aggregator, speech_queue, agent_task, speech_task, _main_loop
+    global agent, aggregator, community_store, speech_queue, agent_task, speech_task, presence_task, _main_loop
     _main_loop = asyncio.get_running_loop()
     speech_queue = asyncio.Queue(maxsize=12)
     speech_task = asyncio.create_task(speech_worker())
     cfg = load_settings()
     state["autonomy"] = int(cfg.get("autonomy") or 70)
+    community_store = CommunityStore(retention_days=_retention_days(cfg))
+    try:
+        community_store.prune(retention_days=_retention_days(cfg))
+    except Exception:
+        logger.exception("community store prune failed")
     agent = CohostAgent(
         get_snapshot=snapshot,
         search_tracks=search_tracks,
@@ -315,6 +357,7 @@ async def lifespan(app: FastAPI):
         note_chat=note_chat,
         room_broadcast=room_broadcast,
         get_settings=load_settings,
+        store=community_store,
     )
     yt_channel = ""
     community = cfg.get("community") or {}
@@ -339,6 +382,7 @@ async def lifespan(app: FastAPI):
         agent.youtube_id = str(cfg.get("youtube_id") or "").strip() or None
     aggregator.start()  # adapters disabled by default in settings
     agent_task = asyncio.create_task(agent.run())
+    presence_task = asyncio.create_task(presence_worker())
     trainer_stop = asyncio.Event()
     trainer_task = asyncio.create_task(idle_trainer(snapshot, trainer_stop))
     tracks = all_tracks()
@@ -351,7 +395,7 @@ async def lifespan(app: FastAPI):
         aggregator.stop()
     if agent:
         agent.stop()
-    for task in (agent_task, speech_task, trainer_task):
+    for task in (agent_task, speech_task, trainer_task, presence_task):
         if task:
             task.cancel()
 
@@ -622,6 +666,25 @@ def community_status():
     return aggregator.status()
 
 
+@app.get("/community/history")
+def community_history(before: Optional[float] = None, limit: int = 100):
+    """Public scrollback — client payloads only (no raw)."""
+    limit = max(1, min(int(limit or 100), 200))
+    if community_store:
+        return {"messages": community_store.history(before=before, limit=limit)}
+    if aggregator:
+        items = aggregator.recent(limit)
+        if before is not None:
+            items = [m for m in items if float(m.get("ts") or 0) < float(before)]
+        return {"messages": items[-limit:]}
+    return {"messages": []}
+
+
+@app.get("/community/presence")
+def community_presence():
+    return presence_payload()
+
+
 @app.post("/agent/demo")
 def set_demo(req: DemoRequest, _auth: None = Depends(require_operator)):
     if not agent:
@@ -654,16 +717,26 @@ async def websocket_endpoint(ws: WebSocket):
 @app.websocket("/ws/room")
 async def room_websocket(ws: WebSocket):
     await room_hub.connect(ws)
-    if aggregator:
-        try:
-            await ws.send_json({"type": "history", "payload": aggregator.recent(50)})
-        except Exception:
-            pass
+    try:
+        if community_store:
+            hist = community_store.history(limit=100)
+        elif aggregator:
+            hist = aggregator.recent(100)
+        else:
+            hist = []
+        await ws.send_json({"type": "history", "payload": hist})
+    except Exception:
+        pass
+    try:
+        await ws.send_json({"type": "presence", "payload": presence_payload()})
+    except Exception:
+        pass
     try:
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
         room_hub.disconnect(ws)
+        room_broadcast({"type": "presence", "payload": presence_payload()})
 
 
 if os.path.isdir(DASH_DIST):
