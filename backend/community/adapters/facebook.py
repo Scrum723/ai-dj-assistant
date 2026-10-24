@@ -78,6 +78,7 @@ class FacebookAdapter(ChatAdapter):
         page_access_token: str = "",
         poll_interval_sec: float = 3.0,
         http_get=None,
+        http_post=None,
     ):
         super().__init__(channel=channel)  # channel = live_video_id
         self.page_access_token = (
@@ -85,9 +86,11 @@ class FacebookAdapter(ChatAdapter):
         ).strip()
         self.poll_interval_sec = max(1.0, float(poll_interval_sec))
         self._http_get = http_get  # injectable for tests
+        self._http_post = http_post
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._seen: set[str] = set()
+        self.can_send = bool(self.page_access_token and self.channel)
 
     def configure(
         self,
@@ -102,9 +105,39 @@ class FacebookAdapter(ChatAdapter):
             self.page_access_token = page_access_token.strip()
         if poll_interval_sec is not None:
             self.poll_interval_sec = max(1.0, float(poll_interval_sec))
+        self.can_send = bool(self.page_access_token and self.channel)
+
+    def set_channel(self, channel: str) -> None:
+        super().set_channel(channel)
+        self.can_send = bool(self.page_access_token and self.channel)
 
     def is_ready(self) -> bool:
         return bool(self.channel and self.page_access_token)
+
+    def send(self, text: str) -> dict:
+        """POST /{live-video-id}/comments as Page."""
+        if not self.page_access_token or not self.channel:
+            raise NotImplementedError("facebook adapter cannot send without page token + live_video_id")
+        message = (text or "").strip()[:500]
+        if not message:
+            return {"id": ""}
+        url = f"{GRAPH_BASE}/{self.channel}/comments"
+        params = {"access_token": self.page_access_token, "message": message}
+        if self._http_post:
+            res = self._http_post(url, params)
+        else:
+            import requests
+
+            res = requests.post(url, data=params, timeout=15)
+        status = getattr(res, "status_code", 200)
+        if status == 429:
+            self._backoff.on_error(is_429=True)
+            raise RuntimeError("Facebook comment rate limited")
+        if status >= 400:
+            body = getattr(res, "text", "")[:200]
+            raise RuntimeError(f"Facebook comment HTTP {status}: {body}")
+        data = res.json() if hasattr(res, "json") else (res if isinstance(res, dict) else {})
+        return {"id": str((data or {}).get("id") or "")}
 
     def start(self, emit: EmitFn) -> None:
         self.stop()

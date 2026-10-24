@@ -14,6 +14,7 @@ PING/PONG, parse PRIVMSG tags.
 from __future__ import annotations
 
 import logging
+import os
 import random
 import re
 import threading
@@ -245,11 +246,37 @@ class TwitchAdapter(ChatAdapter):
     name = "twitch"
     can_send = False
 
-    def __init__(self, channel: str = ""):
+    def __init__(
+        self,
+        channel: str = "",
+        *,
+        bot_token: str = "",
+        bot_nick: str = "",
+        irc_connect=None,
+    ):
         super().__init__(channel=channel.lstrip("#").lower() if channel else "")
+        self.bot_token = (bot_token or os.getenv("TWITCH_BOT_TOKEN") or "").strip()
+        self.bot_nick = (bot_nick or os.getenv("TWITCH_BOT_NICK") or "").strip().lower()
+        self.can_send = bool(self.bot_token and self.bot_nick)
+        self._irc_connect = irc_connect  # injectable for tests
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._ws: Any = None
+
+    def configure(
+        self,
+        *,
+        channel: Optional[str] = None,
+        bot_token: Optional[str] = None,
+        bot_nick: Optional[str] = None,
+    ) -> None:
+        if channel is not None:
+            self.set_channel(channel)
+        if bot_token is not None:
+            self.bot_token = bot_token.strip()
+        if bot_nick is not None:
+            self.bot_nick = bot_nick.strip().lower()
+        self.can_send = bool(self.bot_token and self.bot_nick)
 
     def set_channel(self, channel: str) -> None:
         was_running = self._running and not self._stop.is_set()
@@ -284,6 +311,52 @@ class TwitchAdapter(ChatAdapter):
                 pass
         self._connected = False
         self._thread = None
+
+    def send(self, text: str) -> dict:
+        """One-shot authenticated IRC PRIVMSG (TWITCH_BOT_TOKEN + bot_nick)."""
+        if not self.can_send:
+            raise NotImplementedError("twitch adapter cannot send without bot_token/bot_nick")
+        channel = self.channel.lstrip("#").lower()
+        if not channel:
+            raise RuntimeError("twitch send requires channel")
+        body = (text or "").strip()[:500]
+        if not body:
+            return {"id": ""}
+        token = self.bot_token
+        if token.lower().startswith("oauth:"):
+            token = token.split(":", 1)[1]
+        nick = self.bot_nick.lower()
+
+        if self._irc_connect:
+            self._irc_connect(channel, nick, token, body)
+            return {"id": f"twitch:out:{int(time.time() * 1000)}"}
+
+        try:
+            from websockets.sync.client import connect
+        except Exception as e:
+            raise RuntimeError(f"websockets missing: {e}") from e
+
+        with connect(IRC_WS_URL, close_timeout=5) as ws:
+            ws.send("CAP REQ :twitch.tv/tags twitch.tv/commands")
+            ws.send(f"PASS oauth:{token}")
+            ws.send(f"NICK {nick}")
+            ws.send(f"JOIN #{channel}")
+            # drain welcome briefly
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                try:
+                    raw = ws.recv(timeout=0.3)
+                except TimeoutError:
+                    break
+                except Exception:
+                    break
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="replace")
+                if "Login authentication failed" in raw or "Login unsuccessful" in raw:
+                    raise RuntimeError("Twitch IRC auth failed")
+            ws.send(f"PRIVMSG #{channel} :{body}")
+            time.sleep(0.15)
+        return {"id": f"twitch:out:{int(time.time() * 1000)}"}
 
     def _loop(self) -> None:
         nick = f"justinfan{random.randint(10000, 99999)}"

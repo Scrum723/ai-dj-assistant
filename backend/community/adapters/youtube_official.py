@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 LIST_URL = "https://www.googleapis.com/youtube/v3/liveChat/messages"
 VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 QUOTA_PER_LIST = 5
+QUOTA_PER_INSERT = 20
 DEFAULT_DAILY_QUOTA = 10_000
 
 _KIND_MAP = {
@@ -146,15 +147,21 @@ class YouTubeOfficialAdapter(ChatAdapter):
         *,
         api_key: str = "",
         live_chat_id: str = "",
+        oauth_token: str = "",
         daily_quota: int = DEFAULT_DAILY_QUOTA,
         http_get=None,
+        http_post=None,
         on_quota_exhausted: Optional[Callable[[], None]] = None,
     ):
         super().__init__(channel=channel)  # video id (optional if live_chat_id set)
         self.api_key = (api_key or os.getenv("YOUTUBE_API_KEY") or "").strip()
         self.live_chat_id = (live_chat_id or "").strip()
+        self.oauth_token = (
+            oauth_token or os.getenv("YOUTUBE_OAUTH_TOKEN") or ""
+        ).strip()
         self.daily_quota = max(QUOTA_PER_LIST, int(daily_quota or DEFAULT_DAILY_QUOTA))
         self._http_get = http_get
+        self._http_post = http_post
         self._on_quota_exhausted = on_quota_exhausted
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -164,6 +171,7 @@ class YouTubeOfficialAdapter(ChatAdapter):
         self._quota_day = date.today().isoformat()
         self._quota_exhausted = False
         self._seen: set[str] = set()
+        self.can_send = bool(self.oauth_token and self.live_chat_id)
 
     def configure(
         self,
@@ -171,6 +179,7 @@ class YouTubeOfficialAdapter(ChatAdapter):
         channel: Optional[str] = None,
         api_key: Optional[str] = None,
         live_chat_id: Optional[str] = None,
+        oauth_token: Optional[str] = None,
         daily_quota: Optional[int] = None,
         on_quota_exhausted: Optional[Callable[[], None]] = None,
     ) -> None:
@@ -180,10 +189,13 @@ class YouTubeOfficialAdapter(ChatAdapter):
             self.api_key = api_key.strip()
         if live_chat_id is not None:
             self.live_chat_id = live_chat_id.strip()
+        if oauth_token is not None:
+            self.oauth_token = oauth_token.strip()
         if daily_quota is not None:
             self.daily_quota = max(QUOTA_PER_LIST, int(daily_quota))
         if on_quota_exhausted is not None:
             self._on_quota_exhausted = on_quota_exhausted
+        self.can_send = bool(self.oauth_token and self.live_chat_id)
 
     def is_ready(self) -> bool:
         return bool(self.api_key and (self.live_chat_id or self.channel))
@@ -257,6 +269,46 @@ class YouTubeOfficialAdapter(ChatAdapter):
         import requests
 
         return requests.get(url, params=params, timeout=20)
+
+    def send(self, text: str) -> dict:
+        """liveChatMessages.insert (quota 20). Requires OAuth token + live_chat_id."""
+        if not self.oauth_token:
+            raise NotImplementedError("youtube_official cannot send without oauth_token")
+        chat_id = self.live_chat_id or self._resolve_live_chat_id()
+        if not chat_id:
+            raise RuntimeError("youtube_official send requires live_chat_id")
+        body_text = (text or "").strip()[:200]
+        if not body_text:
+            return {"id": ""}
+        if not self._charge_quota(QUOTA_PER_INSERT):
+            self._error = "daily quota exhausted"
+            raise RuntimeError("youtube_official quota exhausted for insert")
+        payload = {
+            "snippet": {
+                "liveChatId": chat_id,
+                "type": "textMessageEvent",
+                "textMessageDetails": {"messageText": body_text},
+            }
+        }
+        params = {"part": "snippet"}
+        headers = {"Authorization": f"Bearer {self.oauth_token}", "Content-Type": "application/json"}
+        if self._http_post:
+            res = self._http_post(LIST_URL, params, payload, headers)
+        else:
+            import requests
+
+            res = requests.post(LIST_URL, params=params, json=payload, headers=headers, timeout=20)
+        status = getattr(res, "status_code", 200)
+        if status == 429:
+            self._backoff.on_error(is_429=True)
+            raise RuntimeError("youtube_official insert rate limited")
+        if status >= 400:
+            body = getattr(res, "text", "")[:200]
+            raise RuntimeError(f"youtube_official insert HTTP {status}: {body}")
+        data = res.json() if hasattr(res, "json") else (res if isinstance(res, dict) else {})
+        out_id = str((data or {}).get("id") or "")
+        self.can_send = bool(self.oauth_token and self.live_chat_id)
+        return {"id": out_id}
 
     def _resolve_live_chat_id(self) -> Optional[str]:
         if self.live_chat_id:

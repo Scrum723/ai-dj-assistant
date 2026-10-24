@@ -60,6 +60,7 @@ class Aggregator:
         identity: Optional[IdentityLike] = None,
         mod: Optional[ModLike] = None,
         on_linked: Optional[Callable[[dict], None]] = None,
+        relay: Optional[Any] = None,
     ):
         self._adapters: dict[str, ChatAdapter] = {}
         self._cohost_ingest = cohost_ingest
@@ -70,6 +71,7 @@ class Aggregator:
         self._identity = identity
         self._mod = mod
         self._on_linked = on_linked
+        self._relay = relay
         self._dedupe = _LRUSet()
         self._history: deque[ChatMessage] = deque(maxlen=HISTORY_MAX)
         self._lock = threading.Lock()
@@ -87,6 +89,14 @@ class Aggregator:
 
     def set_mod(self, mod: Optional[ModLike]) -> None:
         self._mod = mod
+
+    def set_relay(self, relay: Optional[Any]) -> None:
+        self._relay = relay
+        if relay is not None and hasattr(relay, "set_get_adapters"):
+            try:
+                relay.set_get_adapters(self.adapters_map)
+            except Exception:
+                logger.exception("relay set_get_adapters failed")
 
     def register(self, adapter: ChatAdapter) -> None:
         self._adapters[adapter.name] = adapter
@@ -149,6 +159,13 @@ class Aggregator:
                     api_key=str(acfg.get("api_key") or "") or None,
                     live_chat_id=str(acfg.get("live_chat_id") or "") or None,
                     daily_quota=acfg.get("daily_quota"),
+                    oauth_token=str(acfg.get("oauth_token") or "") or None,
+                )
+            elif name == "twitch":
+                configure(
+                    channel=channel or None,
+                    bot_token=str(acfg.get("bot_token") or "") or None,
+                    bot_nick=str(acfg.get("bot_nick") or "") or None,
                 )
             elif name == "tiktok":
                 configure(
@@ -327,6 +344,14 @@ class Aggregator:
             logger.debug("dedupe drop %s", msg.id)
             return False
 
+        if self._relay is not None and msg.kind != "system":
+            try:
+                if self._relay.is_echo(msg):
+                    logger.info("aggregator relay-echo drop id=%s platform=%s", msg.id, msg.platform)
+                    return False
+            except Exception:
+                logger.exception("relay echo check failed")
+
         self._resolve_profile(msg)
         link_handled = False
         if msg.kind != "system":
@@ -419,6 +444,12 @@ class Aggregator:
             except Exception:
                 logger.exception("room broadcast failed")
 
+        if self._relay is not None and (msg.platform or "").strip().lower() in ("room", "halo"):
+            try:
+                self._relay.handle(msg)
+            except Exception:
+                logger.exception("relay handle failed")
+
         return True
 
     def publish_halo(self, text: str, *, name: str = "Halo") -> bool:
@@ -463,9 +494,16 @@ class Aggregator:
             )
             adapters[name] = st
         alerts = list(getattr(self, "_operator_alerts", []) or [])[-20:]
+        relay_status = None
+        if self._relay is not None and hasattr(self._relay, "status"):
+            try:
+                relay_status = self._relay.status()
+            except Exception:
+                relay_status = None
         return {
             "started": self._started,
             "history_len": len(self._history),
             "adapters": adapters,
             "operator_alerts": alerts,
+            "relay": relay_status,
         }

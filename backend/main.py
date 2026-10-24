@@ -27,6 +27,7 @@ from community.adapters.youtube import YouTubeAdapter
 from community.adapters.youtube_official import YouTubeOfficialAdapter
 from community.identity import IdentityStore, get_identity, set_identity
 from community.mod import CommunityMod, get_mod, set_mod
+from community.relay import CommunityRelay
 from community.schema import ChatMessage, ChatUser
 from community.store import CommunityStore, DEFAULT_RETENTION_DAYS
 from dj_controller import DJController, MIDI_MAP
@@ -48,6 +49,7 @@ agent: Optional[CohostAgent] = None
 aggregator: Optional[Aggregator] = None
 community_store: Optional[CommunityStore] = None
 community_mod: Optional[CommunityMod] = None
+community_relay: Optional[CommunityRelay] = None
 speech_queue: asyncio.Queue
 agent_task: Optional[asyncio.Task] = None
 speech_task: Optional[asyncio.Task] = None
@@ -420,6 +422,11 @@ async def lifespan(app: FastAPI):
         on_linked=_on_linked,
     )
     community_mod.set_get_adapters(aggregator.adapters_map)
+    community_relay = CommunityRelay(
+        get_settings=load_settings,
+        get_adapters=aggregator.adapters_map,
+    )
+    aggregator.set_relay(community_relay)
     yt_channel = ""
     community = cfg.get("community") or {}
     adapters_cfg = community.get("adapters") or {}
@@ -431,7 +438,13 @@ async def lifespan(app: FastAPI):
     yt_off_cfg = adapters_cfg.get("youtube_official") or {}
     yt_channel = str(yt_cfg.get("channel") or cfg.get("youtube_id") or "").strip()
     aggregator.register(YouTubeAdapter(channel=yt_channel))
-    aggregator.register(TwitchAdapter(channel=str(tw_cfg.get("channel") or "")))
+    aggregator.register(
+        TwitchAdapter(
+            channel=str(tw_cfg.get("channel") or ""),
+            bot_token=str(tw_cfg.get("bot_token") or ""),
+            bot_nick=str(tw_cfg.get("bot_nick") or ""),
+        )
+    )
     aggregator.register(
         KickAdapter(
             channel=str(kick_cfg.get("channel") or ""),
@@ -478,6 +491,7 @@ async def lifespan(app: FastAPI):
             channel=str(yt_off_cfg.get("channel") or cfg.get("youtube_id") or ""),
             api_key=str(yt_off_cfg.get("api_key") or ""),
             live_chat_id=str(yt_off_cfg.get("live_chat_id") or ""),
+            oauth_token=str(yt_off_cfg.get("oauth_token") or ""),
             daily_quota=int(yt_off_cfg.get("daily_quota") or 10000),
             on_quota_exhausted=_yt_official_quota_fallback,
         )

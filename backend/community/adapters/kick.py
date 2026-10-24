@@ -415,7 +415,7 @@ class KickAdapter(ChatAdapter):
         self._health = "ok"
         return msg
 
-    def send(self, text: str) -> None:
+    def send(self, text: str) -> dict:
         if not self.access_token:
             raise NotImplementedError("kick adapter cannot send without access_token")
         import requests
@@ -435,3 +435,9 @@ class KickAdapter(ChatAdapter):
             self._error = "429 rate limited"
             raise RuntimeError("Kick chat send rate limited")
         res.raise_for_status()
+        data = res.json() if hasattr(res, "json") else {}
+        if isinstance(data, dict):
+            mid = str((data.get("data") or {}).get("message_id") or data.get("id") or "")
+        else:
+            mid = ""
+        return {"id": mid}

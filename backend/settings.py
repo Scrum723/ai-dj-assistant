@@ -108,9 +108,20 @@ DEFAULTS = {
         "in_jokes": [],
         "retention_days": 30,
         "push_bans": False,
+        "relay": {
+            "twitch": {"halo": False, "room": False, "max_per_min": 10},
+            "youtube_official": {"halo": False, "room": False, "max_per_min": 6},
+            "kick": {"halo": False, "room": False, "max_per_min": 10},
+            "facebook": {"halo": False, "room": False, "max_per_min": 10},
+        },
         "adapters": {
             "youtube": {"enabled": False, "channel": ""},
-            "twitch": {"enabled": False, "channel": ""},
+            "twitch": {
+                "enabled": False,
+                "channel": "",
+                "bot_token": "",
+                "bot_nick": "",
+            },
             "kick": {
                 "enabled": False,
                 "channel": "",
@@ -135,6 +146,7 @@ DEFAULTS = {
                 "channel": "",
                 "live_chat_id": "",
                 "api_key": "",
+                "oauth_token": "",
                 "daily_quota": 10000,
             },
             "tiktok": {
@@ -204,6 +216,8 @@ _SECRET_ADAPTER_KEYS = (
     "api_key",
     "api_url",  # Rumble URL embeds livestream key
     "bearer_token",  # X API
+    "bot_token",  # Twitch IRC chat:edit
+    "oauth_token",  # YouTube liveChatMessages.insert
 )
 
 
