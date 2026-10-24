@@ -19,6 +19,8 @@ const ADAPTER_META = [
   { key: 'kick', label: 'Kick (webhooks)', channelKey: 'channel', channelLabel: 'Channel slug', secretKey: 'access_token', secretLabel: 'Access token (send)' },
   { key: 'facebook', label: 'Facebook Live', channelKey: 'live_video_id', channelLabel: 'Live video ID', secretKey: 'page_access_token', secretLabel: 'Page access token' },
   { key: 'rumble', label: 'Rumble', channelKey: null, channelLabel: null, secretKey: 'api_url', secretLabel: 'Livestream API URL' },
+  { key: 'tiktok', label: 'TikTok LIVE', channelKey: 'username', channelLabel: 'Username', experimental: true },
+  { key: 'x', label: 'X (replies to post)', channelKey: 'post_id', channelLabel: 'Post ID', secretKey: 'bearer_token', secretLabel: 'Bearer token', experimental: true },
 ];
 
 const healthColor = (h) => {
@@ -233,6 +235,7 @@ export default function Settings({ state, refresh }) {
         <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 0 }}>
           Disabled by default. Health from /community/status — red means dead and never blocks others.
           Kick / Facebook Page / Rumble / YouTube API tokens are blockers until Charles creates developer apps.
+          TikTok LIVE and X are experimental (unofficial / no live-chat API); auto-disable after 5 failures in 10 min.
         </p>
         {ADAPTER_META.map((meta) => {
           const cfg = adapters[meta.key] || {};
@@ -246,11 +249,17 @@ export default function Settings({ state, refresh }) {
                   checked={!!cfg.enabled}
                   onChange={(e) => setAdapter(meta.key, { enabled: e.target.checked })}
                 />
-                <span style={{ flex: 1 }}>{meta.label}</span>
+                <span style={{ flex: 1 }}>{meta.label}{meta.experimental ? ' ⚠ experimental' : ''}</span>
                 <span title={st.error || ''} style={{ color: healthColor(health), fontSize: 12, fontWeight: 700 }}>
                   ● {health}{st.error ? ` — ${String(st.error).slice(0, 40)}` : ''}
                 </span>
               </label>
+              {meta.experimental && cfg.enabled && (
+                <p style={{ color: '#fbbf24', fontSize: 12, margin: '6px 0 0' }}>
+                  Experimental: best-effort only. May break, violate platform terms, or auto-disable after repeated failures.
+                  Accept the risk before going live.
+                </p>
+              )}
               {meta.channelKey && (
                 <label style={lab}>{meta.channelLabel}
                   <input

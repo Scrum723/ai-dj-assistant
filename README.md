@@ -122,8 +122,29 @@ Halo starts with the app. The overlay is her face: she greets people, answers ch
 | `YOUTUBE_LIVE_VIDEO_ID` | unset | Optional default YouTube live id (adapters still off until enabled in settings) |
 | `ELEVENLABS_API_KEY` | unset | Optional TTS; falls through to macOS `say` / browser speech |
 | `COOKIE_SECURE` | — | Set `true` on Railway / HTTPS |
+| `X_BEARER_TOKEN` | unset | Optional X API bearer for experimental replies adapter |
+| `X_POST_ID` | unset | Optional root post id for X replies polling |
+| `RUMBLE_LIVESTREAM_API_URL` | unset | Rumble livestream API URL (embeds key) |
+| `FACEBOOK_PAGE_ACCESS_TOKEN` | unset | Facebook Page token for Live comments |
 
 Switch providers with `HALO_PROVIDER` only — no code change. Viewer memory persists in `$DATA_DIR/halo.db`; room history in `$DATA_DIR/community.db`. Full template: `.env.example`.
+
+### Platform reality
+
+How chat is read today (adapters stay **off** until enabled in Settings):
+
+| Platform | Read chat | Send | Notes |
+|----------|-----------|------|-------|
+| YouTube (pytchat) | Unofficial (pytchat) | No | Default YT path; no quota |
+| YouTube official | Data API `liveChatMessages` | Later (quota) | Daily quota guard; falls back to pytchat |
+| Twitch | Anonymous IRC | Later (bot token) | Read-only justinfan |
+| Kick | Events webhooks | If access token | Signature-verified |
+| Facebook Live | Graph API comments | Later (Page) | Needs Page token + live video id |
+| Rumble | Livestream API JSON poll | No | Read-only |
+| TikTok LIVE | **Experimental** unofficial webcast (`TikTokLive` optional) | No | Off by default; terms risk; auto-disable 5 fails / 10 min |
+| X | **Experimental** replies/quotes to a post | Only if `can_post` | No live-chat API; needs bearer + post id |
+
+Experimental adapters show a warning in Settings when enabled and auto-disable after 5 failures in 10 minutes (operator alert on `/community/status` and room).
 
 **Local run (this PC):** use `.venv\Scripts\python.exe` and `python -m pytest -q` from the repo root. Cloud boot uses `requirements-cloud.txt` (no MIDI / no librosa).
 

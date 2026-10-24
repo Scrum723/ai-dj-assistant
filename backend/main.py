@@ -20,7 +20,9 @@ from community.aggregator import Aggregator
 from community.adapters.facebook import FacebookAdapter
 from community.adapters.kick import KickAdapter, verify_kick_signature
 from community.adapters.rumble import RumbleAdapter
+from community.adapters.tiktok import TikTokAdapter
 from community.adapters.twitch import TwitchAdapter
+from community.adapters.x import XAdapter
 from community.adapters.youtube import YouTubeAdapter
 from community.adapters.youtube_official import YouTubeOfficialAdapter
 from community.identity import IdentityStore, get_identity, set_identity
@@ -469,6 +471,72 @@ async def lifespan(app: FastAPI):
         )
     )
 
+    operator_alerts: list[dict] = []
+
+    def _operator_alert(payload: dict) -> None:
+        operator_alerts.append(payload)
+        if len(operator_alerts) > 50:
+            del operator_alerts[:-50]
+        try:
+            room_broadcast({"type": "operator_alert", "payload": payload})
+        except Exception:
+            logger.exception("operator_alert broadcast failed")
+        try:
+            if aggregator:
+                aggregator.ingest(
+                    ChatMessage(
+                        id=f"system:alert:{payload.get('adapter')}:{time.time()}",
+                        platform="halo",
+                        channel="booth",
+                        user=ChatUser(
+                            platform_user_id="system",
+                            handle="system",
+                            display_name="System",
+                            is_owner=True,
+                        ),
+                        text=str(payload.get("message") or "Experimental adapter alert"),
+                        kind="system",
+                        ts=float(payload.get("ts") or time.time()),
+                    )
+                )
+        except Exception:
+            logger.exception("operator_alert ingest failed")
+
+    def _auto_disable_adapter(name: str, reason: str) -> None:
+        logger.warning("auto-disabling experimental adapter %s: %s", name, reason)
+        try:
+            save_settings({"community": {"adapters": {name: {"enabled": False}}}})
+        except Exception:
+            logger.exception("failed to persist auto-disable for %s", name)
+        if aggregator:
+            try:
+                aggregator.configure_adapter(name, enabled=False)
+            except Exception:
+                logger.exception("configure_adapter disable failed for %s", name)
+
+    tt_cfg = adapters_cfg.get("tiktok") or {}
+    x_cfg = adapters_cfg.get("x") or {}
+    aggregator.register(
+        TikTokAdapter(
+            channel=str(tt_cfg.get("username") or tt_cfg.get("channel") or ""),
+            username=str(tt_cfg.get("username") or tt_cfg.get("channel") or ""),
+            on_auto_disable=_auto_disable_adapter,
+            on_alert=_operator_alert,
+        )
+    )
+    aggregator.register(
+        XAdapter(
+            channel=str(x_cfg.get("post_id") or x_cfg.get("channel") or ""),
+            post_id=str(x_cfg.get("post_id") or x_cfg.get("channel") or ""),
+            bearer_token=str(x_cfg.get("bearer_token") or ""),
+            can_post=bool(x_cfg.get("can_post")),
+            poll_interval_sec=float(x_cfg.get("poll_interval_sec") or 15),
+            on_auto_disable=_auto_disable_adapter,
+            on_alert=_operator_alert,
+        )
+    )
+    aggregator._operator_alerts = operator_alerts  # type: ignore[attr-defined]
+
     def _on_youtube_change(video_id: Optional[str]) -> None:
         vid = (video_id or "").strip()
         save_settings({"youtube_id": vid or "", "community": {"adapters": {"youtube": {"channel": vid}}}})
@@ -625,7 +693,7 @@ def update_settings_route(patch: dict, _auth: None = Depends(require_operator)):
     community_patch = patch.get("community") if isinstance(patch.get("community"), dict) else None
     if community_patch and isinstance(community_patch.get("adapters"), dict):
         cur_adapters = (current.get("community") or {}).get("adapters") or {}
-        secret_keys = ("access_token", "page_access_token", "api_key", "api_url")
+        secret_keys = ("access_token", "page_access_token", "api_key", "api_url", "bearer_token")
         for name, acfg in community_patch["adapters"].items():
             if not isinstance(acfg, dict):
                 continue

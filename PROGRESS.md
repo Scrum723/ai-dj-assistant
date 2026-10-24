@@ -16,7 +16,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] B3 — Booth pass identity — Google/Facebook OAuth callbacks (signed state, mocked tests), apple/tiktok 501; identity.py linked_handles + !link CODE; Aggregator profile_id; memory merge by profile_id; Profile.jsx; request_priority perk
 - [x] A7 — Regulars, recurring segments and rituals — greeting SM (first/returning/milestone once per show), where_from + favourite_genres memory, segments.py scheduler + Room listening-from/segment UI, community in-jokes ≤1/15m; chat-path request_priority
 - [x] B4 — Adapters with official APIs (Kick, Facebook, Rumble, YouTube official) — webhooks+sig, Graph poll, Rumble poll, YT liveChatMessages+quota/pytchat fallback; Settings health; fixtures
-- [ ] B5 — Experimental adapters: TikTok LIVE and X
+- [x] B5 — Experimental adapters: TikTok LIVE and X — optional TikTokLive + X replies poll; experimental flags; auto-disable 5/10min; README Platform reality; Settings warning
 - [ ] B6 — Unified moderation and ban sync
 - [ ] B7 — Relay back to platform chats
 - [ ] B8 — Retention hooks and djbotbotty.com front door
@@ -69,4 +69,5 @@ Concrete setup checklist (no credentials invented here — create these when rea
 - B1 Twitch docs (2026-10-24): official IRC requires oauth PASS/NICK; non-SSL WS removed. Adapter still uses justinfan anonymous read-only over `wss://irc-ws.chat.twitch.tv:443` per plan (community practice; EventSub preferred long-term).
 - B1 YouTube: pytchat loop moved to adapter; cohost.set_youtube updates adapter channel via hook. Official liveChatMessages left as TODO.
 - B4 docs (2026-10-24): Kick webhook RSA over messageId.timestamp.body (docs.kick.com/events/webhook-security); Facebook Graph v26 live-video comments; Rumble livestream API JSON (support article 2025-11-20); YT liveChatMessages.list quota 5/call + pollingIntervalMillis. Dead adapters isolated; Charles tokens logged as blockers.
+- B5 docs (2026-10-24): TikTokLive optional (unofficial webcast; no official LIVE chat API); X recent search conversation_id/quoted_tweet_id (docs.x.com rate limits). Both off by default; auto-disable after 5 failures / 10 min + operator alert.
 - Session restart mid-A6: WIP stashed as `wip/a6-shoutouts`; setup gate (env/docs/blockers/gitignore) runs before restoring A6.

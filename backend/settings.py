@@ -136,6 +136,21 @@ DEFAULTS = {
                 "api_key": "",
                 "daily_quota": 10000,
             },
+            "tiktok": {
+                "enabled": False,
+                "username": "",
+                "channel": "",
+                "experimental": True,
+            },
+            "x": {
+                "enabled": False,
+                "post_id": "",
+                "channel": "",
+                "bearer_token": "",
+                "can_post": False,
+                "poll_interval_sec": 15,
+                "experimental": True,
+            },
         },
     },
 }
@@ -187,6 +202,7 @@ _SECRET_ADAPTER_KEYS = (
     "page_access_token",
     "api_key",
     "api_url",  # Rumble URL embeds livestream key
+    "bearer_token",  # X API
 )
 
 

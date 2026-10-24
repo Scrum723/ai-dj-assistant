@@ -1,0 +1,10 @@
+{
+  "type": "join",
+  "id": "tt-j1",
+  "user": {
+    "uniqueId": "newbie",
+    "nickname": "Newbie",
+    "userId": "9003"
+  },
+  "ts": 1710000003
+}

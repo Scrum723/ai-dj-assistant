@@ -90,7 +90,14 @@ class Aggregator:
 
     def _apply_adapter_config(self, name: str, adapter: ChatAdapter, acfg: dict) -> None:
         """Push settings fields into known adapters without failing unknown ones."""
-        channel = str(acfg.get("channel") or acfg.get("live_video_id") or acfg.get("api_url") or "").strip()
+        channel = str(
+            acfg.get("channel")
+            or acfg.get("username")
+            or acfg.get("post_id")
+            or acfg.get("live_video_id")
+            or acfg.get("api_url")
+            or ""
+        ).strip()
         if channel:
             adapter.set_channel(channel)
         configure = getattr(adapter, "configure", None)
@@ -120,6 +127,17 @@ class Aggregator:
                     api_key=str(acfg.get("api_key") or "") or None,
                     live_chat_id=str(acfg.get("live_chat_id") or "") or None,
                     daily_quota=acfg.get("daily_quota"),
+                )
+            elif name == "tiktok":
+                configure(
+                    username=str(acfg.get("username") or acfg.get("channel") or "") or None,
+                )
+            elif name == "x":
+                configure(
+                    post_id=str(acfg.get("post_id") or acfg.get("channel") or "") or None,
+                    bearer_token=str(acfg.get("bearer_token") or "") or None,
+                    can_post=acfg.get("can_post"),
+                    poll_interval_sec=acfg.get("poll_interval_sec"),
                 )
         except Exception:
             logger.exception("configure adapter %s failed", name)
@@ -394,10 +412,19 @@ class Aggregator:
             st = adapter.status()
             acfg = cfg.get(name) or {}
             st["enabled"] = bool(acfg.get("enabled"))
-            st["configured_channel"] = str(acfg.get("channel") or "")
+            st["configured_channel"] = str(
+                acfg.get("channel")
+                or acfg.get("username")
+                or acfg.get("post_id")
+                or acfg.get("live_video_id")
+                or acfg.get("api_url")
+                or ""
+            )
             adapters[name] = st
+        alerts = list(getattr(self, "_operator_alerts", []) or [])[-20:]
         return {
             "started": self._started,
             "history_len": len(self._history),
             "adapters": adapters,
+            "operator_alerts": alerts,
         }
