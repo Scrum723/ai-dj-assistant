@@ -3,4 +3,5 @@ uvicorn[standard]>=0.30
 python-dotenv>=1.0
 google-genai>=1.0
 requests>=2.32
+cryptography>=42
 pydantic>=2.0

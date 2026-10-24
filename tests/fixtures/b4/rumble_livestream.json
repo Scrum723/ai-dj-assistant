@@ -1,0 +1,41 @@
+{
+  "now": 1695059500,
+  "type": "user",
+  "user_id": "XXXXX",
+  "livestreams": [
+    {
+      "id": "stream42",
+      "title": "Title of Live Stream",
+      "created_on": "2023-09-18T17:51:19+00:00",
+      "is_live": true,
+      "watching_now": 19,
+      "chat": {
+        "latest_message": {
+          "username": "UserNameH",
+          "badges": ["admin", "premium"],
+          "text": "test chat",
+          "created_on": "2023-09-18T17:51:08+00:00"
+        },
+        "recent_messages": [
+          {
+            "username": "UserNameA",
+            "badges": ["admin", "premium", "whale-blue"],
+            "text": "This is my chat message",
+            "created_on": "2023-09-18T17:51:08+00:00"
+          }
+        ],
+        "recent_rants": [
+          {
+            "username": "UserNameB",
+            "badges": ["premium"],
+            "text": "Rant Message",
+            "created_on": "2023-09-18T17:51:37+00:00",
+            "expires_on": "2023-09-18T17:53:37+00:00",
+            "amount_cents": 100,
+            "amount_dollars": 1
+          }
+        ]
+      }
+    }
+  ]
+}

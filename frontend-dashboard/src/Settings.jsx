@@ -12,11 +12,29 @@ const CAPS = [
   ['midi', 'Allow MIDI deck takeover'],
 ];
 
+const ADAPTER_META = [
+  { key: 'youtube', label: 'YouTube (pytchat)', channelKey: 'channel', channelLabel: 'Video ID' },
+  { key: 'youtube_official', label: 'YouTube official API', channelKey: 'channel', channelLabel: 'Video ID', secretKey: 'api_key', secretLabel: 'API key' },
+  { key: 'twitch', label: 'Twitch', channelKey: 'channel', channelLabel: 'Channel' },
+  { key: 'kick', label: 'Kick (webhooks)', channelKey: 'channel', channelLabel: 'Channel slug', secretKey: 'access_token', secretLabel: 'Access token (send)' },
+  { key: 'facebook', label: 'Facebook Live', channelKey: 'live_video_id', channelLabel: 'Live video ID', secretKey: 'page_access_token', secretLabel: 'Page access token' },
+  { key: 'rumble', label: 'Rumble', channelKey: null, channelLabel: null, secretKey: 'api_url', secretLabel: 'Livestream API URL' },
+];
+
+const healthColor = (h) => {
+  if (h === 'ok') return '#6ee7b7';
+  if (h === 'degraded') return '#fbbf24';
+  if (h === 'dead') return '#f87171';
+  return '#9ca3af';
+};
+
 export default function Settings({ state, refresh }) {
   const [form, setForm] = useState(null);
   const [voices, setVoices] = useState([]);
   const [saved, setSaved] = useState('');
   const [eleven, setEleven] = useState('');
+  const [adapterHealth, setAdapterHealth] = useState({});
+  const [secretDrafts, setSecretDrafts] = useState({});
 
   useEffect(() => {
     setForm(state?.settings ? structuredClone(state.settings) : null);
@@ -24,6 +42,23 @@ export default function Settings({ state, refresh }) {
 
   useEffect(() => {
     api('/voices').then((d) => setVoices(d.macos || [])).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      api('/community/status')
+        .then((d) => {
+          if (!cancelled) setAdapterHealth(d?.adapters || {});
+        })
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   if (!form) return <p style={{ color: '#9ca3af' }}>Loading settings…</p>;
@@ -34,13 +69,44 @@ export default function Settings({ state, refresh }) {
   const setEnv = (patch) => setForm({ ...form, environment: { ...env, ...patch } });
   const setCap = (key, value) => setHalo({ capabilities: { ...halo.capabilities, [key]: value } });
 
+  const adapters = form.community?.adapters || {};
+  const setAdapter = (key, patch) => {
+    setForm({
+      ...form,
+      community: {
+        ...(form.community || {}),
+        adapters: {
+          ...adapters,
+          [key]: { ...(adapters[key] || {}), ...patch },
+        },
+      },
+    });
+  };
+
   const save = async () => {
-    const payload = { ...form };
+    const payload = structuredClone(form);
     if (eleven.trim()) payload.halo = { ...payload.halo, elevenlabs_key: eleven.trim() };
+    const ads = payload.community?.adapters || {};
+    for (const [key, draft] of Object.entries(secretDrafts)) {
+      if (!draft || !String(draft).trim()) continue;
+      const [adapterKey, field] = key.split(':');
+      if (!ads[adapterKey]) ads[adapterKey] = {};
+      ads[adapterKey][field] = String(draft).trim();
+    }
+    // Do not wipe secrets that were redacted in public settings
+    for (const meta of ADAPTER_META) {
+      const cur = ads[meta.key] || {};
+      const prev = adapters[meta.key] || {};
+      if (meta.secretKey && !cur[meta.secretKey] && prev[`${meta.secretKey}_set`]) {
+        delete cur[meta.secretKey];
+      }
+    }
     await api('/settings', { method: 'POST', body: JSON.stringify(payload) });
     setEleven('');
+    setSecretDrafts({});
     setSaved('Saved. Voice and energy take effect on the next line Halo speaks.');
     refresh();
+    api('/community/status').then((d) => setAdapterHealth(d?.adapters || {})).catch(() => {});
   };
 
   return (
@@ -163,6 +229,52 @@ export default function Settings({ state, refresh }) {
             />
           </label>
         ))}
+        <h3 style={{ ...h, fontSize: 16, marginTop: 18 }}>Community chat adapters</h3>
+        <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 0 }}>
+          Disabled by default. Health from /community/status — red means dead and never blocks others.
+          Kick / Facebook Page / Rumble / YouTube API tokens are blockers until Charles creates developer apps.
+        </p>
+        {ADAPTER_META.map((meta) => {
+          const cfg = adapters[meta.key] || {};
+          const st = adapterHealth[meta.key] || {};
+          const health = st.health || (st.connected ? 'ok' : st.running ? 'degraded' : 'idle');
+          return (
+            <div key={meta.key} style={{ borderTop: '1px solid #2d2d2d', paddingTop: 10, marginTop: 10 }}>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', color: '#e5e7eb' }}>
+                <input
+                  type="checkbox"
+                  checked={!!cfg.enabled}
+                  onChange={(e) => setAdapter(meta.key, { enabled: e.target.checked })}
+                />
+                <span style={{ flex: 1 }}>{meta.label}</span>
+                <span title={st.error || ''} style={{ color: healthColor(health), fontSize: 12, fontWeight: 700 }}>
+                  ● {health}{st.error ? ` — ${String(st.error).slice(0, 40)}` : ''}
+                </span>
+              </label>
+              {meta.channelKey && (
+                <label style={lab}>{meta.channelLabel}
+                  <input
+                    value={cfg[meta.channelKey] || cfg.channel || ''}
+                    onChange={(e) => setAdapter(meta.key, { [meta.channelKey]: e.target.value, channel: e.target.value })}
+                    style={inp}
+                  />
+                </label>
+              )}
+              {meta.secretKey && (
+                <label style={lab}>
+                  {meta.secretLabel}{cfg[`${meta.secretKey}_set`] ? ' (saved — leave blank to keep)' : ''}
+                  <input
+                    type="password"
+                    value={secretDrafts[`${meta.key}:${meta.secretKey}`] || ''}
+                    onChange={(e) => setSecretDrafts({ ...secretDrafts, [`${meta.key}:${meta.secretKey}`]: e.target.value })}
+                    placeholder={cfg[`${meta.secretKey}_set`] ? '••••••••' : ''}
+                    style={inp}
+                  />
+                </label>
+              )}
+            </div>
+          );
+        })}
         <button onClick={save} style={btn}>Save settings</button>
         {saved && <p style={{ color: '#6ee7b7' }}>{saved}</p>}
       </section>

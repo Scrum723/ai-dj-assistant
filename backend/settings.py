@@ -110,6 +110,32 @@ DEFAULTS = {
         "adapters": {
             "youtube": {"enabled": False, "channel": ""},
             "twitch": {"enabled": False, "channel": ""},
+            "kick": {
+                "enabled": False,
+                "channel": "",
+                "access_token": "",
+                "broadcaster_user_id": None,
+            },
+            "facebook": {
+                "enabled": False,
+                "live_video_id": "",
+                "channel": "",
+                "page_access_token": "",
+                "poll_interval_sec": 3,
+            },
+            "rumble": {
+                "enabled": False,
+                "api_url": "",
+                "channel": "",
+                "poll_interval_sec": 3,
+            },
+            "youtube_official": {
+                "enabled": False,
+                "channel": "",
+                "live_chat_id": "",
+                "api_key": "",
+                "daily_quota": 10000,
+            },
         },
     },
 }
@@ -156,9 +182,27 @@ def save(patch: dict) -> dict:
     return merged
 
 
+_SECRET_ADAPTER_KEYS = (
+    "access_token",
+    "page_access_token",
+    "api_key",
+    "api_url",  # Rumble URL embeds livestream key
+)
+
+
 def public_settings(data: dict | None = None) -> dict:
     data = copy.deepcopy(data if data is not None else load())
     key = data.get("halo", {}).get("elevenlabs_key") or ""
     data["halo"]["elevenlabs_key_set"] = bool(key)
     data["halo"]["elevenlabs_key"] = ""
+    adapters = ((data.get("community") or {}).get("adapters") or {})
+    if isinstance(adapters, dict):
+        for _name, acfg in adapters.items():
+            if not isinstance(acfg, dict):
+                continue
+            for sk in _SECRET_ADAPTER_KEYS:
+                if sk in acfg:
+                    present = bool(acfg.get(sk))
+                    acfg[f"{sk}_set"] = present
+                    acfg[sk] = ""
     return data

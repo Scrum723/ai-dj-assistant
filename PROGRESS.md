@@ -15,7 +15,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] A6 — Supporter shoutouts — ChatMessage.support + adapter fixtures (YT/Twitch/Kick/TikTok), burst thank-yous at supporter priority, overlay/room highlight, GET /community/supporters/today; amounts spoken only if halo.say_amounts
 - [x] B3 — Booth pass identity — Google/Facebook OAuth callbacks (signed state, mocked tests), apple/tiktok 501; identity.py linked_handles + !link CODE; Aggregator profile_id; memory merge by profile_id; Profile.jsx; request_priority perk
 - [x] A7 — Regulars, recurring segments and rituals — greeting SM (first/returning/milestone once per show), where_from + favourite_genres memory, segments.py scheduler + Room listening-from/segment UI, community in-jokes ≤1/15m; chat-path request_priority
-- [ ] B4 — Adapters with official APIs (Kick, Facebook, Rumble, YouTube official)
+- [x] B4 — Adapters with official APIs (Kick, Facebook, Rumble, YouTube official) — webhooks+sig, Graph poll, Rumble poll, YT liveChatMessages+quota/pytchat fallback; Settings health; fixtures
 - [ ] B5 — Experimental adapters: TikTok LIVE and X
 - [ ] B6 — Unified moderation and ban sync
 - [ ] B7 — Relay back to platform chats
@@ -43,7 +43,7 @@ Concrete setup checklist (no credentials invented here — create these when rea
 ### Chat platforms (B1–B7)
 - [ ] YouTube: live video id + (later) Data API key/quota for official adapter
 - [ ] Twitch: channel name for anon read; bot token with chat:write if enabling relay (B7)
-- [ ] Kick / Facebook Page / Rumble developer apps + tokens (B4)
+- [ ] **B4 blocker:** Kick developer app + webhook URL + OAuth token (chat:write if send); Facebook Page access token + live video id; Rumble livestream API URL from rumble.com/account/livestream-api; YouTube Data API key + quota for youtube_official
 - [ ] TikTok LIVE terms risk acceptance + experimental enable (B5)
 - [ ] X API credentials + live post id if using experimental X adapter (B5)
 - [ ] **A6:** Live test donation / Super Chat / sub on one platform
@@ -68,4 +68,5 @@ Concrete setup checklist (no credentials invented here — create these when rea
 - B3: Google/Facebook callbacks mocked in tests; live staging login needs Charles OAuth apps. Apple/TikTok callback 501 by design.
 - B1 Twitch docs (2026-10-24): official IRC requires oauth PASS/NICK; non-SSL WS removed. Adapter still uses justinfan anonymous read-only over `wss://irc-ws.chat.twitch.tv:443` per plan (community practice; EventSub preferred long-term).
 - B1 YouTube: pytchat loop moved to adapter; cohost.set_youtube updates adapter channel via hook. Official liveChatMessages left as TODO.
+- B4 docs (2026-10-24): Kick webhook RSA over messageId.timestamp.body (docs.kick.com/events/webhook-security); Facebook Graph v26 live-video comments; Rumble livestream API JSON (support article 2025-11-20); YT liveChatMessages.list quota 5/call + pollingIntervalMillis. Dead adapters isolated; Charles tokens logged as blockers.
 - Session restart mid-A6: WIP stashed as `wip/a6-shoutouts`; setup gate (env/docs/blockers/gitignore) runs before restoring A6.

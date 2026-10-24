@@ -7,7 +7,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,8 +17,12 @@ from auth import COOKIE, require_operator, user_from_cookie
 from auth import router as auth_router
 from cohost import CohostAgent
 from community.aggregator import Aggregator
+from community.adapters.facebook import FacebookAdapter
+from community.adapters.kick import KickAdapter, verify_kick_signature
+from community.adapters.rumble import RumbleAdapter
 from community.adapters.twitch import TwitchAdapter
 from community.adapters.youtube import YouTubeAdapter
+from community.adapters.youtube_official import YouTubeOfficialAdapter
 from community.identity import IdentityStore, get_identity, set_identity
 from community.schema import ChatMessage, ChatUser
 from community.store import CommunityStore, DEFAULT_RETENTION_DAYS
@@ -407,9 +411,63 @@ async def lifespan(app: FastAPI):
     adapters_cfg = community.get("adapters") or {}
     yt_cfg = adapters_cfg.get("youtube") or {}
     tw_cfg = adapters_cfg.get("twitch") or {}
+    kick_cfg = adapters_cfg.get("kick") or {}
+    fb_cfg = adapters_cfg.get("facebook") or {}
+    rumble_cfg = adapters_cfg.get("rumble") or {}
+    yt_off_cfg = adapters_cfg.get("youtube_official") or {}
     yt_channel = str(yt_cfg.get("channel") or cfg.get("youtube_id") or "").strip()
     aggregator.register(YouTubeAdapter(channel=yt_channel))
     aggregator.register(TwitchAdapter(channel=str(tw_cfg.get("channel") or "")))
+    aggregator.register(
+        KickAdapter(
+            channel=str(kick_cfg.get("channel") or ""),
+            access_token=str(kick_cfg.get("access_token") or ""),
+            broadcaster_user_id=kick_cfg.get("broadcaster_user_id"),
+        )
+    )
+    aggregator.register(
+        FacebookAdapter(
+            channel=str(fb_cfg.get("live_video_id") or fb_cfg.get("channel") or ""),
+            page_access_token=str(fb_cfg.get("page_access_token") or ""),
+            poll_interval_sec=float(fb_cfg.get("poll_interval_sec") or 3),
+        )
+    )
+    aggregator.register(
+        RumbleAdapter(
+            channel=str(rumble_cfg.get("api_url") or rumble_cfg.get("channel") or ""),
+            api_url=str(rumble_cfg.get("api_url") or rumble_cfg.get("channel") or ""),
+            poll_interval_sec=float(rumble_cfg.get("poll_interval_sec") or 3),
+        )
+    )
+
+    def _yt_official_quota_fallback() -> None:
+        """When official quota is exhausted, start pytchat youtube adapter if configured."""
+        if not aggregator:
+            return
+        s = load_settings()
+        ycfg = ((s.get("community") or {}).get("adapters") or {}).get("youtube") or {}
+        vid = str(ycfg.get("channel") or s.get("youtube_id") or "").strip()
+        if not vid:
+            return
+        # Enable pytchat path without requiring settings flip if channel known
+        yt = aggregator.get_adapter("youtube")
+        if yt and not yt.status().get("running"):
+            try:
+                yt.set_channel(vid)
+                yt.start(aggregator.ingest)
+                logger.warning("youtube_official quota exhausted — fell back to pytchat youtube adapter")
+            except Exception:
+                logger.exception("pytchat fallback start failed")
+
+    aggregator.register(
+        YouTubeOfficialAdapter(
+            channel=str(yt_off_cfg.get("channel") or cfg.get("youtube_id") or ""),
+            api_key=str(yt_off_cfg.get("api_key") or ""),
+            live_chat_id=str(yt_off_cfg.get("live_chat_id") or ""),
+            daily_quota=int(yt_off_cfg.get("daily_quota") or 10000),
+            on_quota_exhausted=_yt_official_quota_fallback,
+        )
+    )
 
     def _on_youtube_change(video_id: Optional[str]) -> None:
         vid = (video_id or "").strip()
@@ -418,6 +476,12 @@ async def lifespan(app: FastAPI):
             # Preserve enabled flag from settings; only update channel.
             enabled = bool(((load_settings().get("community") or {}).get("adapters") or {}).get("youtube", {}).get("enabled"))
             aggregator.configure_adapter("youtube", enabled=enabled, channel=vid)
+            off_enabled = bool(
+                ((load_settings().get("community") or {}).get("adapters") or {})
+                .get("youtube_official", {})
+                .get("enabled")
+            )
+            aggregator.configure_adapter("youtube_official", enabled=off_enabled, channel=vid)
 
     agent.set_youtube_hook(_on_youtube_change)
 
@@ -557,12 +621,30 @@ def update_settings_route(patch: dict, _auth: None = Depends(require_operator)):
         halo_patch.pop("elevenlabs_key_set", None)
         if not halo_patch.get("elevenlabs_key"):
             halo_patch["elevenlabs_key"] = current["halo"].get("elevenlabs_key") or ""
+    # Preserve redacted adapter secrets when client sends empty / *_set flags
+    community_patch = patch.get("community") if isinstance(patch.get("community"), dict) else None
+    if community_patch and isinstance(community_patch.get("adapters"), dict):
+        cur_adapters = (current.get("community") or {}).get("adapters") or {}
+        secret_keys = ("access_token", "page_access_token", "api_key", "api_url")
+        for name, acfg in community_patch["adapters"].items():
+            if not isinstance(acfg, dict):
+                continue
+            prev = cur_adapters.get(name) or {}
+            for sk in secret_keys:
+                acfg.pop(f"{sk}_set", None)
+                if not acfg.get(sk) and prev.get(sk):
+                    acfg[sk] = prev[sk]
     data = save_settings(patch)
     if agent:
         if "demo" in patch:
             agent.set_demo(bool(data.get("demo")))
         if "youtube_id" in patch:
             agent.set_youtube(data.get("youtube_id") or None)
+    if aggregator and community_patch and "adapters" in community_patch:
+        try:
+            aggregator.start()
+        except Exception:
+            logger.exception("adapter restart after settings save failed")
     state["autonomy"] = int(data.get("autonomy") or 70)
     publish_state()
     return public_settings(data)
@@ -801,6 +883,54 @@ def community_status():
     if not aggregator:
         return {"started": False, "adapters": {}}
     return aggregator.status()
+
+
+@app.post("/community/webhooks/kick")
+async def kick_webhook(
+    request: Request,
+    kick_event_message_id: Optional[str] = Header(default=None, alias="Kick-Event-Message-Id"),
+    kick_event_message_timestamp: Optional[str] = Header(default=None, alias="Kick-Event-Message-Timestamp"),
+    kick_event_signature: Optional[str] = Header(default=None, alias="Kick-Event-Signature"),
+    kick_event_type: Optional[str] = Header(default=None, alias="Kick-Event-Type"),
+):
+    """Kick Events API webhook — verifies RSA signature then maps to ChatMessage."""
+    body = await request.body()
+    if not kick_event_message_id or not kick_event_message_timestamp or not kick_event_signature:
+        raise HTTPException(401, "missing Kick signature headers")
+    # Tests may set KICK_SKIP_SIGNATURE=1; production must verify.
+    skip = os.getenv("KICK_SKIP_SIGNATURE", "").strip() in {"1", "true", "yes"}
+    if not skip:
+        ok = verify_kick_signature(
+            message_id=kick_event_message_id,
+            timestamp=kick_event_message_timestamp,
+            body=body,
+            signature_b64=kick_event_signature,
+        )
+        if not ok:
+            raise HTTPException(401, "invalid Kick signature")
+    try:
+        import json as _json
+
+        payload = _json.loads(body.decode("utf-8") or "{}")
+    except Exception:
+        raise HTTPException(400, "invalid JSON body")
+    if not aggregator:
+        return {"status": "ok", "accepted": False, "reason": "aggregator offline"}
+    kick = aggregator.get_adapter("kick")
+    if kick is None or not isinstance(kick, KickAdapter):
+        return {"status": "ok", "accepted": False, "reason": "kick adapter missing"}
+    if not kick.status().get("running"):
+        # Auto-start when webhook arrives and adapter enabled in settings
+        acfg = ((load_settings().get("community") or {}).get("adapters") or {}).get("kick") or {}
+        if bool(acfg.get("enabled")):
+            try:
+                kick.start(aggregator.ingest)
+            except Exception:
+                logger.exception("kick webhook start failed")
+        else:
+            return {"status": "ok", "accepted": False, "reason": "kick disabled"}
+    msg = kick.handle_webhook_payload(payload, event_type=kick_event_type or "")
+    return {"status": "ok", "accepted": bool(msg), "id": msg.id if msg else None}
 
 
 @app.get("/community/history")

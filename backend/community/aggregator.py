@@ -88,28 +88,78 @@ class Aggregator:
     def get_adapter(self, name: str) -> Optional[ChatAdapter]:
         return self._adapters.get(name)
 
+    def _apply_adapter_config(self, name: str, adapter: ChatAdapter, acfg: dict) -> None:
+        """Push settings fields into known adapters without failing unknown ones."""
+        channel = str(acfg.get("channel") or acfg.get("live_video_id") or acfg.get("api_url") or "").strip()
+        if channel:
+            adapter.set_channel(channel)
+        configure = getattr(adapter, "configure", None)
+        if not callable(configure):
+            return
+        try:
+            if name == "kick":
+                configure(
+                    channel=channel or None,
+                    access_token=str(acfg.get("access_token") or "") or None,
+                    broadcaster_user_id=acfg.get("broadcaster_user_id"),
+                )
+            elif name == "facebook":
+                configure(
+                    live_video_id=str(acfg.get("live_video_id") or acfg.get("channel") or "") or None,
+                    page_access_token=str(acfg.get("page_access_token") or "") or None,
+                    poll_interval_sec=acfg.get("poll_interval_sec"),
+                )
+            elif name == "rumble":
+                configure(
+                    api_url=str(acfg.get("api_url") or acfg.get("channel") or "") or None,
+                    poll_interval_sec=acfg.get("poll_interval_sec"),
+                )
+            elif name == "youtube_official":
+                configure(
+                    channel=channel or None,
+                    api_key=str(acfg.get("api_key") or "") or None,
+                    live_chat_id=str(acfg.get("live_chat_id") or "") or None,
+                    daily_quota=acfg.get("daily_quota"),
+                )
+        except Exception:
+            logger.exception("configure adapter %s failed", name)
+
     def start(self) -> None:
-        """Start adapters that are enabled in settings."""
+        """Start adapters that are enabled in settings. Dead adapters never block others."""
         cfg = (self._get_settings().get("community") or {}).get("adapters") or {}
-        for name, adapter in self._adapters.items():
+        for name, adapter in list(self._adapters.items()):
             acfg = cfg.get(name) or {}
             enabled = bool(acfg.get("enabled"))
-            channel = str(acfg.get("channel") or "").strip()
-            if channel:
-                adapter.set_channel(channel)
-            if enabled and channel:
+            try:
+                self._apply_adapter_config(name, adapter, acfg)
+            except Exception:
+                logger.exception("adapter config %s failed", name)
+            ready = False
+            try:
+                ready = bool(adapter.is_ready()) if hasattr(adapter, "is_ready") else bool(adapter.channel)
+            except Exception:
+                logger.exception("adapter is_ready %s failed", name)
+            if enabled and ready:
                 try:
                     adapter.start(self.ingest)
-                    logger.info("community adapter %s started channel=%s", name, channel)
+                    logger.info("community adapter %s started channel=%s", name, adapter.channel)
                 except Exception:
                     logger.exception("failed to start adapter %s", name)
+                    try:
+                        adapter.stop()
+                    except Exception:
+                        pass
             else:
-                adapter.stop()
+                try:
+                    adapter.stop()
+                except Exception:
+                    logger.exception("adapter stop failed: %s", name)
                 logger.info(
-                    "community adapter %s disabled (enabled=%s channel=%r)",
+                    "community adapter %s disabled (enabled=%s ready=%s channel=%r)",
                     name,
                     enabled,
-                    channel,
+                    ready,
+                    adapter.channel,
                 )
         self._started = True
 
@@ -125,15 +175,20 @@ class Aggregator:
         adapter = self._adapters.get(name)
         if not adapter:
             return
-        if channel is not None:
-            adapter.set_channel(channel)
         cfg = (self._get_settings().get("community") or {}).get("adapters") or {}
         acfg = dict(cfg.get(name) or {})
+        if channel is not None:
+            adapter.set_channel(channel)
+            acfg["channel"] = channel
+        self._apply_adapter_config(name, adapter, acfg)
         if enabled is None:
             enabled = bool(acfg.get("enabled"))
-        ch = adapter.channel or str(acfg.get("channel") or "")
-        if enabled and ch:
-            adapter.start(self.ingest)
+        ready = bool(adapter.is_ready()) if hasattr(adapter, "is_ready") else bool(adapter.channel)
+        if enabled and ready:
+            try:
+                adapter.start(self.ingest)
+            except Exception:
+                logger.exception("failed to start adapter %s", name)
         else:
             adapter.stop()
 
