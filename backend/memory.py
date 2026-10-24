@@ -22,6 +22,15 @@ def _day_key(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d")
 
 
+def _norm_platform(platform: str) -> str:
+    return (platform or "chat").strip().lower() or "chat"
+
+
+def _norm_handle(handle: str) -> str:
+    """Lowercase key so visit counts survive casing changes (matches cohost _returning)."""
+    return (handle or "").strip().lower()
+
+
 def ordinal(n: int) -> str:
     n = int(n)
     if 11 <= (n % 100) <= 13:
@@ -90,8 +99,8 @@ class ViewerMemory:
     def touch(self, platform: str, handle: str) -> tuple[ViewerRecord, bool]:
         """Upsert viewer. Returns (record, is_returning) where is_returning means
         known viewer whose previous last_seen was on an earlier UTC day."""
-        platform = (platform or "chat").strip().lower() or "chat"
-        handle = (handle or "").strip()
+        platform = _norm_platform(platform)
+        handle = _norm_handle(handle)
         if not handle:
             raise ValueError("handle required")
         now = time.time()
@@ -153,8 +162,10 @@ class ViewerMemory:
             )
 
     def get(self, platform: str, handle: str) -> Optional[ViewerRecord]:
-        platform = (platform or "chat").strip().lower() or "chat"
-        handle = (handle or "").strip()
+        platform = _norm_platform(platform)
+        handle = _norm_handle(handle)
+        if not handle:
+            return None
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM viewers WHERE platform = ? AND handle = ?",
@@ -181,8 +192,8 @@ class ViewerMemory:
         *,
         note: Optional[str] = None,
     ) -> None:
-        platform = (platform or "chat").strip().lower() or "chat"
-        handle = (handle or "").strip()
+        platform = _norm_platform(platform)
+        handle = _norm_handle(handle)
         request = (request or "").strip()[:200]
         if not handle or not request:
             return

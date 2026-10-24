@@ -40,16 +40,17 @@ def test_classify_returning(agent, tmp_memory):
     tmp_memory.touch("youtube", "Regular")
     row = tmp_memory.get("youtube", "Regular")
     assert row is not None
+    assert row.handle == "regular"
     with tmp_memory._connect() as conn:
         conn.execute(
             "UPDATE viewers SET last_seen = ?, visits = 1 WHERE platform = ? AND handle = ?",
-            (time.time() - 86400 * 2, "youtube", "Regular"),
+            (time.time() - 86400 * 2, "youtube", "regular"),
         )
         conn.commit()
 
-    agent.ingest("Regular", "hey I'm back", platform="youtube")
+    agent.ingest("REGULAR", "hey I'm back", platform="youtube")
     assert "youtube:regular" in agent._returning
-    kind = agent._classify("Regular", "hey I'm back", platform="youtube")
+    kind = agent._classify("REGULAR", "hey I'm back", platform="youtube")
     assert kind == "returning"
 
 

@@ -11,10 +11,10 @@ def test_viewer_memory_line(agent, tmp_memory):
     with tmp_memory._connect() as conn:
         conn.execute(
             "UPDATE viewers SET visits = 5, last_request = ? WHERE platform = ? AND handle = ?",
-            ("Mad World", "chat", "Fan"),
+            ("Mad World", "chat", "fan"),
         )
         conn.commit()
-    line = agent._viewer_memory_line("Fan", "chat")
+    line = agent._viewer_memory_line("FAN", "chat")
     assert line == "Viewer memory: 5th visit, last asked for Mad World"
 
 
@@ -23,7 +23,7 @@ def test_compose_prompt_includes_memory(agent, fake_llm, tmp_memory):
     with tmp_memory._connect() as conn:
         conn.execute(
             "UPDATE viewers SET visits = 5, last_request = ? WHERE platform = ? AND handle = ?",
-            ("Mad World", "chat", "Fan"),
+            ("Mad World", "chat", "fan"),
         )
         conn.commit()
     agent._last_gemini = 0.0
