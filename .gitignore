@@ -12,3 +12,8 @@ backend/halo_training.jsonl
 backend/sentinel_incidents.jsonl
 Halo.app/
 voice_cache/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.superpowers/
