@@ -21,7 +21,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] B7 — Relay back to platform chats — community/relay rules+token-bucket+echo map; send() Twitch/YT official/Kick/FB; Aggregator loop drop; off by default
 - [x] B8 — Retention hooks and djbotbotty.com front door — shows/next, streaks+badges 3/10/25, /me/notify store-only, /healthz without mido
 - [x] C1 — MIDI control layer and fake deck sandbox — per-deck MIDI_MAP, DJController.send gates (kill/automation/takeover), non-blocking play tap, DJ_BACKEND=sim FakeMidiOut+DeckSimulator, /action/{eq,filter,sync,panic,load,takeover}, dashboard MANUAL TAKEOVER
-- [ ] C2 — Track analysis v2
+- [x] C2 — Track analysis v2 — full-track BPM/key/Camelot/beats/phrases/energy; rekordbox XML import; lazy librosa; migration
 - [ ] C3 — Next-track selection
 - [ ] C4 — Mix engine, replays and transition scoring
 - [ ] C5 — Safety fallback and manual override
@@ -56,7 +56,7 @@ Concrete setup checklist (no credentials invented here — create these when rea
 
 ### Mac DJ booth (C1–C5)
 - [ ] **C1 blocker:** Import MIDI Learn mapping on `AI_DJ_Virtual_Port` in rekordbox (see docs/rekordbox-mapping.md)
-- [ ] Run analysis on `~/Desktop/Finished Songs`; export rekordbox XML (C2)
+- [ ] **C2 blocker:** Run analysis on `~/Desktop/Finished Songs`; export rekordbox XML for `--rekordbox-xml` import
 - [ ] Export rekordbox history for replay scoring (C4)
 - [ ] Controller + audio loopback (e.g. BlackHole) for takeover/silence watchdog (C5)
 
