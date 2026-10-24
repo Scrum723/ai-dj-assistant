@@ -87,6 +87,7 @@ def test_min_reply_sec_under_load_picks_mention(agent, spoken):
     agent._last_reply_at = time.time()
     agent._last_idle = time.time()
     agent._pending.clear()
+    agent.queue.clear()
 
     agent.ingest("Chatty", "cool vibes", platform="twitch")
     agent.ingest("Asker", "hey halo", platform="youtube")
@@ -95,7 +96,7 @@ def test_min_reply_sec_under_load_picks_mention(agent, spoken):
 
     asyncio.run(agent._tick())
     assert spoken == []
-    assert len(agent._pending) >= 2
+    assert agent.queue.length() >= 2
 
     agent._last_reply_at = time.time() - 9
     agent._last_idle = time.time()

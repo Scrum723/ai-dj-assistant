@@ -14,6 +14,7 @@ from typing import Any, Callable, Optional
 
 from dotenv import load_dotenv
 
+from halo_queue import ACK_WAIT_SEC, PriorityQueue
 from llm import LLMProvider, get_provider
 from memory import ViewerMemory
 from moderation import check_input, check_output, mute, unmute
@@ -109,10 +110,24 @@ IDLE_GENERIC = [
     "This set's for the night crowd. Tell me if you want it darker or brighter.",
     "Don't be shy in chat. I talk back.",
 ]
+IDLE_WAITING_ROOM = [
+    "Halo's holding the waiting room — Charles isn't live right now. Drop a request or say hey.",
+    "Booth's quiet for now. Ask about the next show or leave a track for the crate.",
+    "Waiting room mode: I still hear you. Requests and questions are welcome.",
+    "Not live at the moment — hang out, request a song, or ask when the next set is.",
+]
 FOLLOW_LINES = [
     "If you're enjoying the mix, follow so you catch the next live set.",
     "New faces in chat — hit follow if you want more of this energy.",
 ]
+FOLLOW_WAITING = [
+    "Follow so you catch the next set when Charles goes live.",
+    "Hit follow if you want a ping for the next show.",
+]
+_LIVE_CLAIM_RE = re.compile(
+    r"\b(charles\s+is\s+live|we'?re\s+live\s+right\s+now|stream\s+is\s+live\s+now)\b",
+    re.I,
+)
 
 DEMO_FANS = [
     ("BassLover99", "this slaps"),
@@ -231,6 +246,7 @@ class CohostAgent:
         self._inbox: asyncio.Queue = asyncio.Queue()
         self._pending: list[dict] = []
         self._last_reply_at = 0.0
+        self._reply_times: deque[float] = deque(maxlen=120)
         self._demo_i = 0
         self._next_demo = 0.0
         self._yt_thread: Optional[threading.Thread] = None
@@ -242,6 +258,9 @@ class CohostAgent:
         self._calls_today = 0
         self._tokens_est = 0
         self._latencies_ms: deque[float] = deque(maxlen=_METRICS_LAT_MAX)
+        self._clock: Callable[[], float] = time.time
+        self.queue = PriorityQueue(clock=lambda: self._clock())
+        self._sync_queue_config()
         if not self._llm.available:
             logger.warning("Halo LLM unavailable — using local lines only.")
 
@@ -267,11 +286,13 @@ class CohostAgent:
         halo = cfg.get("halo") or {}
         env = cfg.get("environment") or {}
         quiet_mood = bool(halo.get("dj_mode") or halo.get("dj_mode_silent"))
+        waiting = self._waiting_room()
+        qsnap = self.queue.snapshot(now=self._clock())
         return {
             "name": self._halo_name(),
             "running": self.running,
             "demo": self.demo,
-            "mood": "quiet" if quiet_mood else self.mood,
+            "mood": "quiet" if quiet_mood else ("waiting" if waiting else self.mood),
             "youtube_id": self.youtube_id,
             "ai_online": bool(self._llm and self._llm.available),
             "last_target": self.last_target,
@@ -287,6 +308,11 @@ class CohostAgent:
             "energy_mode": env.get("energy_mode") or "balanced",
             "vibe": env.get("vibe") or "night",
             "listen_mic": bool(halo.get("listen_mic")),
+            "live": not waiting,
+            "waiting_room": waiting,
+            "queue_length": qsnap["length"],
+            "queue": qsnap["tasks"],
+            "queue_positions": qsnap["positions"],
             "quiet": bool(self.quiet),
             "killed": bool(is_killed()),
         }
@@ -351,12 +377,87 @@ class CohostAgent:
             "tokens_est": self._tokens_est,
         }
 
+    def _sync_queue_config(self) -> None:
+        halo = self._cfg().get("halo") or {}
+        pri = halo.get("priorities") if isinstance(halo.get("priorities"), dict) else None
+        try:
+            ttl = float(halo.get("task_ttl_sec") if halo.get("task_ttl_sec") is not None else 120)
+        except (TypeError, ValueError):
+            ttl = 120.0
+        self.queue.configure(priorities=pri, task_ttl_sec=ttl)
+
+    def _waiting_room(self) -> bool:
+        """True when Charles is offline (halo.live=false) or no stream is active."""
+        halo = self._cfg().get("halo") or {}
+        if halo.get("live") is False:
+            return True
+        if not bool(halo.get("live", True)):
+            return True
+        has_stream = bool(self.youtube_id)
+        try:
+            snap = self.get_snapshot() or {}
+            if snap.get("playing"):
+                has_stream = True
+        except Exception:
+            pass
+        # Explicit live=True keeps booth mode even without a detected stream
+        if halo.get("live") is True:
+            return False
+        return not has_stream
+
     def _min_reply_sec(self) -> float:
         raw = (self._cfg().get("halo") or {}).get("min_reply_sec")
         try:
-            return max(0.0, float(8 if raw is None else raw))
+            base = max(0.0, float(8 if raw is None else raw))
         except (TypeError, ValueError):
-            return 8.0
+            base = 8.0
+        if self._waiting_room():
+            return max(base, 15.0)
+        return base
+
+    def _max_replies_per_min(self) -> int:
+        raw = (self._cfg().get("halo") or {}).get("max_replies_per_min")
+        try:
+            n = int(6 if raw is None else raw)
+        except (TypeError, ValueError):
+            n = 6
+        if self._waiting_room():
+            return max(1, min(n, 2))
+        return max(1, n)
+
+    def _user_cooldown_sec(self, kind: str = "regular") -> float:
+        raw = (self._cfg().get("halo") or {}).get("user_cooldown_sec")
+        try:
+            base = float(20 if raw is None else raw)
+        except (TypeError, ValueError):
+            base = 20.0
+        if self._waiting_room():
+            return max(30.0, base)
+        if kind in {"welcome", "returning", "question", "mention"}:
+            return min(base, 12.0)
+        return base
+
+    def _reply_budget_ok(self, now: float) -> bool:
+        cutoff = now - 60.0
+        while self._reply_times and self._reply_times[0] < cutoff:
+            self._reply_times.popleft()
+        return len(self._reply_times) < self._max_replies_per_min()
+
+    def _queue_kind(self, classified: str, author: str, platform: str, event_kind: str | None = None) -> str:
+        if self._is_operator(author, platform):
+            return "operator"
+        ek = (event_kind or "").strip().lower()
+        if ek in {"super_chat", "gift", "member", "follow", "supporter"}:
+            return "supporter"
+        if classified == "request":
+            return "request"
+        if classified == "mention":
+            return "mention"
+        if classified in {"welcome", "new_viewer"}:
+            return "first_timer"
+        if classified in {"returning", "question", "hype", "chat"}:
+            return "regular"
+        return "regular"
 
     def _platform_label(self, platform: str) -> str:
         p = (platform or "chat").strip().lower() or "chat"
@@ -518,6 +619,36 @@ class CohostAgent:
         )
         return kind in {"mention", "request"}
 
+    def _queue_task_dj_ok(self, task) -> bool:
+        if task.kind in {"operator", "safety", "supporter", "request", "mention"}:
+            return True
+        return self._is_dj_priority(self._item_from_task(task))
+
+    def _item_from_task(self, task) -> dict:
+        item = dict(task.payload or {})
+        item.setdefault("author", task.target)
+        item.setdefault("message", (task.payload or {}).get("message") or "")
+        item.setdefault("platform", task.platform)
+        item.setdefault("ts", task.created_ts)
+        kind_map = {
+            "request": "request",
+            "mention": "mention",
+            "first_timer": "welcome",
+            "operator": "mention",
+            "safety": "mention",
+            "supporter": "mention",
+            "regular": item.get("_kind") or "chat",
+            "idle": "chat",
+        }
+        if task.kind == "supporter":
+            item["_kind"] = "mention"
+            item["event_kind"] = item.get("event_kind") or "supporter"
+        elif task.kind in kind_map:
+            item["_kind"] = kind_map[task.kind]
+        elif not item.get("_kind"):
+            item["_kind"] = "chat"
+        return item
+
     def _handle_operator_command(self, author: str, message: str, platform: str) -> bool:
         if not self._is_operator(author, platform):
             return False
@@ -549,6 +680,7 @@ class CohostAgent:
         platform: str = "chat",
         *,
         from_aggregator: bool = False,
+        event_kind: str | None = None,
     ):
         author = (author or "Fan").strip()[:40]
         message = (message or "").strip()[:280]
@@ -578,19 +710,32 @@ class CohostAgent:
                 self._returning.add(f"{mem_platform}:{author.lower()}")
         except Exception:
             logger.exception("viewer memory touch failed")
+        now = self._clock()
         item = {
             "author": author,
             "message": message,
             "platform": platform,
-            "ts": time.time(),
+            "ts": now,
+            "event_kind": event_kind,
         }
         self.chat.append(item)
         if author not in self.viewers:
-            self.viewers[author] = time.time()
+            self.viewers[author] = now
         if platform != "demo":
-            self.last_real_chat = time.time()
+            self.last_real_chat = now
         if not from_aggregator:
             self.note_chat(item)
+        classified = self._classify(author, message, platform=platform)
+        item["_kind"] = classified
+        q_kind = self._queue_kind(classified, author, platform, event_kind=event_kind)
+        self._sync_queue_config()
+        self.queue.push(
+            kind=q_kind,
+            target=author,
+            platform=platform,
+            payload=item,
+            now=now,
+        )
         try:
             self._inbox.put_nowait(item)
         except asyncio.QueueFull:
@@ -631,44 +776,77 @@ class CohostAgent:
         energy = env.get("energy_mode") or "balanced"
         distraction = int(env.get("distraction") or 30)
         autonomy = int(cfg.get("autonomy") or self.get_autonomy())
-        now = time.time()
+        now = self._clock()
+        self._sync_queue_config()
+        waiting = self._waiting_room()
 
+        # Drain legacy inbox (kept for demo/compat); queue is source of truth
         while True:
             try:
-                self._pending.append(self._inbox.get_nowait())
+                self._inbox.get_nowait()
             except asyncio.QueueEmpty:
                 break
 
-        min_sec = self._min_reply_sec()
-        if self._pending and not self.quiet and not dj_silent:
-            due = self._last_reply_at <= 0 or (now - self._last_reply_at) >= min_sec
-            # DJ quiet: answer mention/request/operator promptly (≤3s), stay silent otherwise
-            if not due and dj_mode and any(self._is_dj_priority(it) for it in self._pending):
-                due = True
-            if due:
-                batch = self._pending
-                self._pending = []
-                if dj_mode:
-                    batch = [it for it in batch if self._is_dj_priority(it)]
-                if batch:
-                    await self._handle_batch(
-                        batch, autonomy, dj_mode=dj_mode, caps=caps, energy=energy
-                    )
-                    self._last_reply_at = time.time()
+        self.queue.expire(now)
 
-        if self.quiet or dj_mode or dj_silent or not caps.get("idle_talk", True) or energy == "eco":
+        min_sec = self._min_reply_sec()
+        due = self._last_reply_at <= 0 or (now - self._last_reply_at) >= min_sec
+        budget_ok = self._reply_budget_ok(now)
+
+        # Honest wait acks (no LLM) after ACK_WAIT_SEC — only when not about to reply
+        if not self.quiet and not dj_silent and not (due and budget_ok and self.queue.peek()):
+            for task, pos in self.queue.tasks_needing_ack(now, wait_sec=ACK_WAIT_SEC):
+                if task.kind in {"idle"}:
+                    continue
+                line = f"Got you {task.target}, you're #{pos}."
+                self._say(line, target=task.target, mood="talk")
+                self.queue.mark_acked(task.task_id)
+                break  # one ack per tick
+
+        def _skip_task(task) -> bool:
+            if dj_mode and not self._queue_task_dj_ok(task):
+                return True
+            if self._is_operator(task.target, task.platform):
+                return False
+            if task.kind in {"operator", "safety", "supporter"}:
+                return False
+            last = self._last_reply_user.get(task.target.lower(), 0.0)
+            return (now - last) < self._user_cooldown_sec(task.kind)
+
+        replied = False
+        if not self.quiet and not dj_silent and due and budget_ok:
+            task = self.queue.pop(now=now, skip_user=_skip_task)
+            if task:
+                item = self._item_from_task(task)
+                await self._handle_chat(
+                    item, autonomy, dj_mode=dj_mode, caps=caps, energy=energy
+                )
+                self._last_reply_at = self._clock()
+                self._reply_times.append(self._last_reply_at)
+                replied = True
+
+        idle_blocked = (
+            self.quiet
+            or dj_mode
+            or dj_silent
+            or not caps.get("idle_talk", True)
+            or energy == "eco"
+        )
+        if idle_blocked:
             idle_every = 120.0
+        elif waiting:
+            idle_every = 60.0
         else:
             base = {"balanced": 42.0, "show": 20.0}.get(energy, 42.0)
             idle_every = max(16.0, base * (1.35 - distraction / 140.0))
         if (
-            (not self.quiet)
+            (not replied)
+            and (not self.quiet)
             and (not dj_mode)
             and (not dj_silent)
             and caps.get("idle_talk", True)
             and now - self._last_idle >= idle_every
-            and self._inbox.empty()
-            and not self._pending
+            and self.queue.length() == 0
         ):
             self._idle_line(autonomy, caps)
             self._last_idle = now
@@ -679,6 +857,7 @@ class CohostAgent:
             and not dj_mode
             and not dj_silent
             and not self.quiet
+            and not waiting
         )
         if demo_ok and now - self.last_real_chat > 25:
             gap = 32.0 + random.uniform(0, 14)
@@ -776,9 +955,9 @@ class CohostAgent:
 
         user_key = author.lower()
         last = self._last_reply_user.get(user_key, 0)
-        cooldown = 12 if kind in {"welcome", "returning", "question", "mention"} else 28
-        # Operator skips per-user cooldown
-        if (not is_op) and time.time() - last < cooldown and kind not in {"request"}:
+        cooldown = self._user_cooldown_sec(kind)
+        # Operator skips per-user cooldown (queue also gates; keep as safety net)
+        if (not is_op) and self._clock() - last < cooldown and kind not in {"request"}:
             return
 
         should = False
@@ -794,7 +973,13 @@ class CohostAgent:
         if not is_op and not caps.get(cap_map.get(kind, "hype"), True):
             return
 
-        if is_op:
+        if is_op or (item.get("event_kind") or "").lower() in {
+            "super_chat",
+            "gift",
+            "member",
+            "follow",
+            "supporter",
+        }:
             should = True
         elif kind in {"welcome", "question", "mention", "new_viewer", "returning"}:
             should = True
@@ -813,6 +998,11 @@ class CohostAgent:
                 hint = "Reply to the booth operator in 2-3 short spoken sentences. Be direct."
             elif dj_mode:
                 hint = "DJ mode: one short spoken sentence. Name them once."
+            elif self._waiting_room():
+                hint = (
+                    "Waiting room: Charles is not live. Never say he is live. "
+                    "Answer briefly; mention schedule or next show if asked. Name them once."
+                )
             else:
                 hint = "Answer briefly if you can. If not, pivot to the music. Name them once."
             line = await self._compose(
@@ -838,8 +1028,27 @@ class CohostAgent:
         title = self._short_title(track.get("filename") or "")
         queue = snap.get("queue") or []
         viewers = [v for v in self.viewers.keys() if v.lower() != self._halo_name().lower()]
-        options = list(IDLE_GENERIC)
         caps = caps or {}
+        halo = self._cfg().get("halo") or {}
+        waiting = self._waiting_room()
+        if waiting:
+            options = list(IDLE_WAITING_ROOM)
+            schedule = (halo.get("schedule") or "").strip()
+            next_show = (halo.get("next_show") or "").strip()
+            last_set = (halo.get("last_set") or "").strip()
+            if schedule:
+                options.append(f"Usual schedule: {schedule}.")
+            if next_show:
+                options.append(f"Next show: {next_show}. I'll be here in the waiting room until then.")
+            if last_set:
+                options.append(f"Last set was {last_set}. Request something for the next one.")
+            if title:
+                options.append(f"Last spin on the decks was {title}. Park a request for next time.")
+            if autonomy >= 50:
+                options.extend(FOLLOW_WAITING)
+            self._say(random.choice(options), mood="idle")
+            return
+        options = list(IDLE_GENERIC)
         if caps.get("introduce_fans") and len(viewers) >= 2:
             a, b = random.sample(viewers, 2)
             options.append(f"{a}, meet {b} — both of you are in the booth tonight. Say hey.")
@@ -995,6 +1204,8 @@ class CohostAgent:
         if not cleaned:
             return
         text = cleaned
+        if self._waiting_room() and _LIVE_CLAIM_RE.search(text):
+            text = _LIVE_CLAIM_RE.sub("Charles isn't live right now", text)
         self.mood = "speaking"
         self.last_target = target
         self.replies += 1

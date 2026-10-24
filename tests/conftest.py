@@ -118,6 +118,11 @@ def agent(tmp_memory, fake_llm, spoken, noted):
                 "persona": "",
                 "dj_mode": False,
                 "dj_mode_silent": False,
+                "live": True,
+                "min_reply_sec": 8,
+                "max_replies_per_min": 6,
+                "user_cooldown_sec": 20,
+                "task_ttl_sec": 120,
                 "operator_handles": ["charles", "charlesclottin"],
                 "capabilities": {
                     "greet": True,

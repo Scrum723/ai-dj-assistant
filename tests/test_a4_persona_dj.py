@@ -104,6 +104,7 @@ def test_dj_mode_answers_mention_silent_otherwise(agent, spoken):
     agent._last_reply_at = 0.0
     agent._last_idle = time.time()
     agent._pending.clear()
+    agent.queue.clear()
 
     agent.ingest("Chatty", "cool vibes tonight", platform="twitch")
     asyncio.run(agent._tick())
@@ -111,6 +112,7 @@ def test_dj_mode_answers_mention_silent_otherwise(agent, spoken):
 
     spoken.clear()
     agent._pending.clear()
+    agent.queue.clear()
     agent.ingest("Asker", "hey halo what's up", platform="youtube")
     t0 = time.perf_counter()
     asyncio.run(agent._tick())
@@ -189,6 +191,7 @@ def test_operator_priority_in_dj_mode(agent, spoken):
     _with_halo(agent, dj_mode=True, operator_handles={"twitch": "charles"})
     agent._last_reply_at = 0.0
     agent._last_idle = time.time()
+    agent.queue.clear()
     agent.ingest("Random", "nice track", platform="youtube")
     agent.ingest("charles", "keep the low end up", platform="twitch")
     asyncio.run(agent._tick())

@@ -127,6 +127,27 @@ class Aggregator:
         else:
             adapter.stop()
 
+    @staticmethod
+    def _is_operator_author(author: str, platform: str, settings: dict) -> bool:
+        """Match halo.operator_handles (list or per-platform dict). Rate skip only."""
+        key = (author or "").strip().lower()
+        if not key:
+            return False
+        raw = (settings.get("halo") or {}).get("operator_handles")
+        plat = (platform or "").strip().lower()
+        handles: set[str] = set()
+        if isinstance(raw, dict) and raw:
+            val = raw.get(plat) or raw.get(platform or "")
+            if isinstance(val, (list, tuple)):
+                handles = {str(h).strip().lower() for h in val if str(h).strip()}
+            elif val is not None and str(val).strip():
+                handles = {str(val).strip().lower()}
+        elif isinstance(raw, list) and raw:
+            handles = {str(h).strip().lower() for h in raw if str(h).strip()}
+        else:
+            handles = {"charles", "charlesclottin"}
+        return key in handles
+
     def ingest(self, msg: ChatMessage | dict) -> bool:
         """Accept a ChatMessage (or dict). Return True if accepted and fanned out."""
         if isinstance(msg, dict):
@@ -138,7 +159,9 @@ class Aggregator:
             return False
 
         settings = self._get_settings()
-        ok, reason = check_input(msg.to_client(), settings=settings)
+        author = (msg.user.display_name or msg.user.handle or "").strip()
+        skip_rate = self._is_operator_author(author, msg.platform, settings)
+        ok, reason = check_input(msg.to_client(), settings=settings, skip_rate=skip_rate)
         if not ok:
             logger.info("aggregator moderation drop id=%s reason=%s", msg.id, reason)
             return False
