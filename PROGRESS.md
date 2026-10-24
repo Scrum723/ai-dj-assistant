@@ -13,7 +13,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] A4 — Persona, voice and DJ mode — persona presets (hype/chill/host/custom), DJ quiet (mentions/requests/operator), operator skip rate/cooldown, TTS 4s timeout fallback, dj_mode_silent for old mute
 - [x] A5 — Priority queue and Halo Waiting Room 24/7 mode — PriorityQueue + cohost pull budget/cooldown, wait acks, waiting-room idle, /state queue fields; aggregator operator skip_rate
 - [x] A6 — Supporter shoutouts — ChatMessage.support + adapter fixtures (YT/Twitch/Kick/TikTok), burst thank-yous at supporter priority, overlay/room highlight, GET /community/supporters/today; amounts spoken only if halo.say_amounts
-- [ ] B3 — Booth pass identity
+- [x] B3 — Booth pass identity — Google/Facebook OAuth callbacks (signed state, mocked tests), apple/tiktok 501; identity.py linked_handles + !link CODE; Aggregator profile_id; memory merge by profile_id; Profile.jsx; request_priority perk
 - [ ] A7 — Regulars, recurring segments and rituals
 - [ ] B4 — Adapters with official APIs (Kick, Facebook, Rumble, YouTube official)
 - [ ] B5 — Experimental adapters: TikTok LIVE and X
@@ -35,9 +35,10 @@ Concrete setup checklist (no credentials invented here — create these when rea
 - [ ] **A4:** Listen test of macOS `say` voices and ElevenLabs in OBS
 
 ### OAuth / booth pass (B3+)
-- [ ] Google OAuth app: `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` (callback URL for `/auth/google/callback`)
-- [ ] Facebook OAuth app: `FACEBOOK_OAUTH_CLIENT_ID` / `FACEBOOK_OAUTH_CLIENT_SECRET`
-- [ ] Apple / TikTok OAuth (optional; endpoints may return 501 until wired)
+- [ ] **B3:** Google OAuth app — create in Google Cloud Console; set `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`; authorized redirect URI = `{origin}/auth/google/callback` (do not invent credentials here)
+- [ ] **B3:** Facebook OAuth app — Meta developer app; set `FACEBOOK_OAUTH_CLIENT_ID` / `FACEBOOK_OAUTH_CLIENT_SECRET`; redirect `{origin}/auth/facebook/callback`
+- [ ] Apple / TikTok OAuth (optional; `/auth/{apple,tiktok}/callback` return 501 until implemented)
+- [ ] Optional: `OAUTH_STATE_SECRET` or `SESSION_SECRET` for CSRF state HMAC (falls back to OPERATOR_KEY / dev default)
 
 ### Chat platforms (B1–B7)
 - [ ] YouTube: live video id + (later) Data API key/quota for official adapter
@@ -64,6 +65,7 @@ Concrete setup checklist (no credentials invented here — create these when rea
 
 ## Notes / deviations
 
+- B3: Google/Facebook callbacks mocked in tests; live staging login needs Charles OAuth apps. Apple/TikTok callback 501 by design.
 - B1 Twitch docs (2026-10-24): official IRC requires oauth PASS/NICK; non-SSL WS removed. Adapter still uses justinfan anonymous read-only over `wss://irc-ws.chat.twitch.tv:443` per plan (community practice; EventSub preferred long-term).
 - B1 YouTube: pytchat loop moved to adapter; cohost.set_youtube updates adapter channel via hook. Official liveChatMessages left as TODO.
 - Session restart mid-A6: WIP stashed as `wip/a6-shoutouts`; setup gate (env/docs/blockers/gitignore) runs before restoring A6.

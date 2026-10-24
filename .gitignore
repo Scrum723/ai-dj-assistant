@@ -16,3 +16,6 @@ Halo.app/
 voice_cache/
 .pytest_cache/
 .superpowers/
+
+identity.db
+backend/identity.db

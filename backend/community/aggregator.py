@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections import OrderedDict, deque
@@ -16,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 DEDUPE_MAX = 2000
 HISTORY_MAX = 200
+LINK_RE = re.compile(r"^!link\s+([A-Za-z0-9]{6})\s*$", re.IGNORECASE)
 
 NoteChatFn = Callable[[dict], None]
 CohostIngestFn = Callable[..., None]
@@ -24,6 +26,7 @@ BroadcastFn = Callable[[dict], None]
 
 # Forward ref for typing without hard import cycle at module load in tests
 StoreLike = Any
+IdentityLike = Any
 
 
 class _LRUSet:
@@ -53,6 +56,8 @@ class Aggregator:
         room_broadcast: Optional[BroadcastFn] = None,
         get_settings: Optional[Callable[[], dict]] = None,
         store: Optional[StoreLike] = None,
+        identity: Optional[IdentityLike] = None,
+        on_linked: Optional[Callable[[dict], None]] = None,
     ):
         self._adapters: dict[str, ChatAdapter] = {}
         self._cohost_ingest = cohost_ingest
@@ -60,6 +65,8 @@ class Aggregator:
         self._room_broadcast = room_broadcast
         self._get_settings = get_settings or (lambda: {})
         self._store = store
+        self._identity = identity
+        self._on_linked = on_linked
         self._dedupe = _LRUSet()
         self._history: deque[ChatMessage] = deque(maxlen=HISTORY_MAX)
         self._lock = threading.Lock()
@@ -71,6 +78,9 @@ class Aggregator:
 
     def set_store(self, store: Optional[StoreLike]) -> None:
         self._store = store
+
+    def set_identity(self, identity: Optional[IdentityLike]) -> None:
+        self._identity = identity
 
     def register(self, adapter: ChatAdapter) -> None:
         self._adapters[adapter.name] = adapter
@@ -148,6 +158,70 @@ class Aggregator:
             handles = {"charles", "charlesclottin"}
         return key in handles
 
+    def _resolve_profile(self, msg: ChatMessage) -> None:
+        if msg.profile_id is not None or self._identity is None:
+            return
+        try:
+            user = msg.user if isinstance(msg.user, ChatUser) else ChatUser()
+            pid = self._identity.resolve(
+                msg.platform,
+                handle=user.handle or user.display_name or "",
+                platform_user_id=user.platform_user_id or "",
+            )
+            if pid is not None:
+                msg.profile_id = int(pid)
+                name = None
+                if hasattr(self._identity, "display_name_for"):
+                    name = self._identity.display_name_for(int(pid))
+                if name:
+                    msg.user.display_name = name
+        except Exception:
+            logger.exception("identity resolve failed")
+
+    def _handle_link_command(self, msg: ChatMessage) -> bool:
+        """If text is !link CODE, consume it. Returns True when handled (skip normal fan-out to Halo as chat)."""
+        text = (msg.text or "").strip()
+        m = LINK_RE.match(text)
+        if not m or self._identity is None:
+            return False
+        code = m.group(1).upper()
+        user = msg.user if isinstance(msg.user, ChatUser) else ChatUser()
+        handle = user.handle or user.display_name or ""
+        try:
+            linked = self._identity.consume_link_code(
+                code,
+                platform=msg.platform,
+                handle=handle,
+                platform_user_id=user.platform_user_id or handle,
+            )
+        except Exception:
+            logger.exception("link code consume failed")
+            linked = None
+        if linked:
+            msg.profile_id = int(linked["user_id"])
+            name = None
+            if hasattr(self._identity, "display_name_for"):
+                name = self._identity.display_name_for(int(linked["user_id"]))
+            profile_name = name or f"pass #{linked['user_id']}"
+            if name:
+                msg.user.display_name = name
+            if self._on_linked:
+                try:
+                    self._on_linked(linked)
+                except Exception:
+                    logger.exception("on_linked hook failed")
+            confirm = f"Booth pass linked — hey {profile_name}, you're one person across platforms now."
+            try:
+                self.publish_halo(confirm)
+            except Exception:
+                logger.exception("halo link confirm failed")
+        else:
+            try:
+                self.publish_halo("That link code expired or is invalid. Grab a fresh one on your Profile page.")
+            except Exception:
+                logger.exception("halo link reject failed")
+        return True
+
     def ingest(self, msg: ChatMessage | dict) -> bool:
         """Accept a ChatMessage (or dict). Return True if accepted and fanned out."""
         if isinstance(msg, dict):
@@ -157,6 +231,11 @@ class Aggregator:
         if self._dedupe.seen(msg.id):
             logger.debug("dedupe drop %s", msg.id)
             return False
+
+        self._resolve_profile(msg)
+        link_handled = False
+        if msg.kind != "system":
+            link_handled = self._handle_link_command(msg)
 
         settings = self._get_settings()
         author = (msg.user.display_name or msg.user.handle or "").strip()
@@ -178,7 +257,7 @@ class Aggregator:
         client = msg.to_client()
         legacy = msg.to_legacy()
 
-        if self._cohost_ingest and msg.kind != "system":
+        if self._cohost_ingest and msg.kind != "system" and not link_handled:
             try:
                 author = msg.user.display_name or msg.user.handle or "Fan"
                 support = msg.support.to_dict() if msg.support else None

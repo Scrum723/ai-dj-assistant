@@ -671,7 +671,12 @@ class CohostAgent:
         query = self._request_query(message)
         self.requests_handled += 1
         try:
-            self.memory.remember_request(item.get("platform") or "chat", author, query)
+            self.memory.remember_request(
+                item.get("platform") or "chat",
+                author,
+                query,
+                profile_id=item.get("profile_id"),
+            )
         except Exception:
             logger.exception("remember_request failed")
         try:
@@ -812,9 +817,16 @@ class CohostAgent:
 
         mem_platform = (platform or "chat").strip().lower() or "chat"
         try:
-            _record, is_returning = self.memory.touch(mem_platform, author)
+            _record, is_returning = self.memory.touch(
+                mem_platform, author, profile_id=profile_id
+            )
             if is_returning:
-                self._returning.add(f"{mem_platform}:{author.lower()}")
+                key = (
+                    f"profile:{profile_id}"
+                    if profile_id is not None
+                    else f"{mem_platform}:{author.lower()}"
+                )
+                self._returning.add(key)
         except Exception:
             logger.exception("viewer memory touch failed")
         now = self._clock()
@@ -1122,7 +1134,9 @@ class CohostAgent:
             query = self._request_query(message)
             self.requests_handled += 1
             try:
-                self.memory.remember_request(platform, author, query)
+                self.memory.remember_request(
+                    platform, author, query, profile_id=item.get("profile_id")
+                )
             except Exception:
                 logger.exception("remember_request failed")
             result = self.enqueue_request(query=query, requester=author, via=platform, silent=True)
@@ -1310,9 +1324,15 @@ class CohostAgent:
             return f"Good question {author}. Stay with the mix and I'll keep you posted from the booth."
         return f"I hear you {author}. Keep talking — this stream's better when the chat's alive."
 
-    def _viewer_memory_line(self, author: str, platform: str = "chat") -> str:
+    def _viewer_memory_line(
+        self,
+        author: str,
+        platform: str = "chat",
+        *,
+        profile_id: Any = None,
+    ) -> str:
         try:
-            rec = self.memory.get(platform or "chat", author)
+            rec = self.memory.get(platform or "chat", author, profile_id=profile_id)
         except Exception:
             return ""
         if not rec:
@@ -1349,6 +1369,7 @@ class CohostAgent:
         platform: str = "chat",
         max_sentences: int | None = None,
         timeout_sec: float | None = None,
+        profile_id: Any = None,
     ) -> str:
         now = time.time()
         self._roll_metrics_day()
@@ -1373,7 +1394,7 @@ class CohostAgent:
             for c in list(self.chat)[-8:]
             if c.get("author") != halo_name
         )
-        memory_line = self._viewer_memory_line(author, platform)
+        memory_line = self._viewer_memory_line(author, platform, profile_id=profile_id)
         crowd = self._crowd_summary()
         prep, label = self._platform_phrase(platform)
         who = author

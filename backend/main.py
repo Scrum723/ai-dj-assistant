@@ -7,19 +7,20 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Cookie, Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from auth import require_operator
+from auth import COOKIE, require_operator, user_from_cookie
 from auth import router as auth_router
 from cohost import CohostAgent
 from community.aggregator import Aggregator
 from community.adapters.twitch import TwitchAdapter
 from community.adapters.youtube import YouTubeAdapter
-from community.schema import ChatMessage
+from community.identity import IdentityStore, get_identity, set_identity
+from community.schema import ChatMessage, ChatUser
 from community.store import CommunityStore, DEFAULT_RETENTION_DAYS
 from dj_controller import DJController, MIDI_MAP
 from sentinel import is_killed
@@ -257,7 +258,15 @@ def queued_speak(text: str, target: Optional[str] = None, mood: str = "talk"):
             pass
 
 
-def enqueue_request(query: str, requester: str, via: str, silent: bool = False) -> dict:
+def enqueue_request(
+    query: str,
+    requester: str,
+    via: str,
+    silent: bool = False,
+    *,
+    priority: bool = False,
+    profile_id: Any = None,
+) -> dict:
     global _request_seq
     results = search_tracks(query)
     _request_seq += 1
@@ -271,8 +280,16 @@ def enqueue_request(query: str, requester: str, via: str, silent: bool = False) 
         "filename": results[0]["filename"] if results else query,
         "bpm": results[0]["bpm"] if results else None,
         "key": results[0]["key"] if results else None,
+        "priority": bool(priority),
+        "profile_id": profile_id,
     }
-    state["queue"].append(item)
+    if priority:
+        idx = 0
+        while idx < len(state["queue"]) and state["queue"][idx].get("priority"):
+            idx += 1
+        state["queue"].insert(idx, item)
+    else:
+        state["queue"].append(item)
     if results:
         push_log(f"Queued {item['filename']} for {requester}")
         speak_text = f"Queued {item['filename']} for {requester}!"
@@ -363,12 +380,27 @@ async def lifespan(app: FastAPI):
         get_autonomy=lambda: int(load_settings().get("autonomy") or 70),
         get_settings=load_settings,
     )
+    identity_store = IdentityStore()
+    set_identity(identity_store)
+
+    def _on_linked(info: dict) -> None:
+        try:
+            agent.memory.attach_profile(
+                info.get("platform") or "chat",
+                info.get("handle") or "",
+                info.get("user_id"),
+            )
+        except Exception:
+            logger.exception("memory attach on link failed")
+
     aggregator = Aggregator(
         cohost_ingest=agent.ingest,
         note_chat=note_chat,
         room_broadcast=room_broadcast,
         get_settings=load_settings,
         store=community_store,
+        identity=identity_store,
+        on_linked=_on_linked,
     )
     yt_channel = ""
     community = cfg.get("community") or {}
@@ -644,10 +676,33 @@ def set_autonomy(req: AutonomyRequest, _auth: None = Depends(require_operator)):
 
 
 @app.post("/request")
-def request_song(req: SongRequest):
-    result = enqueue_request(req.query, req.requester, req.via, silent=req.silent)
+def request_song(
+    req: SongRequest,
+    djbb_session: Optional[str] = Cookie(default=None, alias=COOKIE),
+):
+    user = user_from_cookie(djbb_session)
+    priority = bool(user and (user.get("perks") or {}).get("request_priority"))
+    requester = req.requester
+    profile_id = None
+    if user:
+        requester = user.get("display_name") or requester
+        profile_id = user.get("id")
+        priority = priority or bool((user.get("perks") or {}).get("request_priority"))
+    result = enqueue_request(
+        req.query,
+        requester,
+        req.via,
+        silent=req.silent,
+        priority=priority,
+        profile_id=profile_id,
+    )
     if agent and not req.silent:
-        agent.ingest(req.requester, f"requested {req.query}", platform=req.via)
+        agent.ingest(
+            requester,
+            f"requested {req.query}",
+            platform=req.via,
+            profile_id=profile_id,
+        )
     return result
 
 
@@ -657,25 +712,75 @@ def speak(req: SpeakRequest):
     return {"status": "ok"}
 
 
+@app.get("/me/profile")
+def me_profile(djbb_session: Optional[str] = Cookie(default=None, alias=COOKIE)):
+    user = user_from_cookie(djbb_session)
+    if not user:
+        raise HTTPException(401, "Sign in required")
+    identity = get_identity()
+    links = identity.list_links(int(user["id"]))
+    return {"user": user, "linked_handles": links}
+
+
+@app.post("/me/link-code")
+def me_link_code(djbb_session: Optional[str] = Cookie(default=None, alias=COOKIE)):
+    user = user_from_cookie(djbb_session)
+    if not user:
+        raise HTTPException(401, "Sign in required")
+    identity = get_identity()
+    return identity.create_link_code(int(user["id"]))
+
+
+class UnlinkIn(BaseModel):
+    platform: str
+    handle: str
+
+
+@app.post("/me/unlink")
+def me_unlink(body: UnlinkIn, djbb_session: Optional[str] = Cookie(default=None, alias=COOKIE)):
+    user = user_from_cookie(djbb_session)
+    if not user:
+        raise HTTPException(401, "Sign in required")
+    identity = get_identity()
+    ok = identity.unlink(int(user["id"]), body.platform, body.handle)
+    return {"ok": ok, "linked_handles": identity.list_links(int(user["id"]))}
+
+
 @app.post("/chat")
-def incoming_chat(req: ChatIn):
+def incoming_chat(
+    req: ChatIn,
+    djbb_session: Optional[str] = Cookie(default=None, alias=COOKIE),
+):
     platform = (req.platform or "room").strip().lower() or "room"
     if platform in ("chat", "dashboard", "terminal", "web"):
         # Treat generic web/dashboard as room for the unified stream.
         if platform in ("chat", "web"):
             platform = "room"
-    msg = ChatMessage.make_room(author=req.author, text=req.message)
+    user = user_from_cookie(djbb_session)
+    author = req.author
+    profile_id = None
+    if user and platform == "room":
+        author = user.get("display_name") or author
+        profile_id = user.get("id")
+    msg = ChatMessage.make_room(author=author, text=req.message)
+    if profile_id is not None:
+        msg.profile_id = int(profile_id)
+        msg.user = ChatUser(
+            platform_user_id=f"user:{profile_id}",
+            handle=author,
+            display_name=author,
+        )
     if platform != "room":
         msg.platform = platform
         msg.id = f"{platform}:{msg.user.handle}:{msg.ts}"
         msg.channel = platform
     if aggregator:
         accepted = aggregator.ingest(msg)
-        return {"status": "ok" if accepted else "dropped"}
+        return {"status": "ok" if accepted else "dropped", "profile_id": msg.profile_id}
     if not agent:
         return {"error": "cohost offline"}
-    agent.ingest(req.author, req.message, platform=platform)
-    return {"status": "ok"}
+    agent.ingest(author, req.message, platform=platform, profile_id=profile_id)
+    return {"status": "ok", "profile_id": profile_id}
 
 
 @app.get("/metrics")

@@ -41,17 +41,20 @@ export default function AuthGate({ children }) {
     <div>
       <div style={bar}>
         <span>DJ Bot Botty pass · {user.display_name}</span>
-        <button
-          type="button"
-          onClick={async () => {
-            await fetch(`${API}/auth/logout`, { method: 'POST', credentials: 'include' });
-            setUser(null);
-            setStep('land');
-          }}
-          style={tiny}
-        >
-          Sign out
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <a href="/booth/?tab=profile" style={{ ...tiny, textDecoration: 'none' }}>Profile</a>
+          <button
+            type="button"
+            onClick={async () => {
+              await fetch(`${API}/auth/logout`, { method: 'POST', credentials: 'include' });
+              setUser(null);
+              setStep('land');
+            }}
+            style={tiny}
+          >
+            Sign out
+          </button>
+        </div>
       </div>
       {children}
     </div>
