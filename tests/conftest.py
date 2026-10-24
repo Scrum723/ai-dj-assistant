@@ -93,10 +93,16 @@ def agent(tmp_memory, fake_llm, spoken, noted):
     def search_tracks(q: str):
         return [{"filename": "Mad World.mp3", "path": "/t/mad.mp3"}]
 
-    def enqueue_request(*, query, requester, via="chat", silent=True):
+    def enqueue_request(*, query, requester, via="chat", silent=True, priority=False, profile_id=None):
         return {
             "status": "queued",
-            "item": {"filename": f"{query}.mp3", "query": query, "requester": requester},
+            "item": {
+                "filename": f"{query}.mp3",
+                "query": query,
+                "requester": requester,
+                "priority": bool(priority),
+                "profile_id": profile_id,
+            },
         }
 
     def speak(text, target=None, mood="talk"):

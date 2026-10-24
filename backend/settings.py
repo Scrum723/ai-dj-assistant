@@ -67,6 +67,13 @@ DEFAULTS = {
             "introduce_fans": True,
             "midi": False,
         },
+        "segments": [
+            {"name": "roll_call", "every_min": 45, "enabled": True, "dj_mode_ok": True},
+            {"name": "request_hour", "at_minute": 0, "enabled": True, "dj_mode_ok": False},
+            {"name": "guess_the_bpm", "every_min": 30, "enabled": True, "dj_mode_ok": False},
+            {"name": "track_id", "enabled": True, "dj_mode_ok": True},
+            {"name": "last_call", "at_minute": 55, "enabled": True, "dj_mode_ok": False},
+        ],
     },
     "environment": {
         "vibe": "night",
@@ -97,6 +104,8 @@ DEFAULTS = {
         "rumble": "https://rumble.com/c/charlesclottin",
     },
     "community": {
+        "name": "",
+        "in_jokes": [],
         "retention_days": 30,
         "adapters": {
             "youtube": {"enabled": False, "channel": ""},

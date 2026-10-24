@@ -158,6 +158,18 @@ def user_from_cookie(token: Optional[str]) -> Optional[dict[str, Any]]:
     return _public(row) if row else None
 
 
+def user_by_id(user_id: Any) -> Optional[dict[str, Any]]:
+    """Lookup public user dict by booth-pass profile id (for chat-path perks)."""
+    try:
+        uid = int(user_id)
+    except (TypeError, ValueError):
+        return None
+    conn = _db()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+    conn.close()
+    return _public(row) if row else None
+
+
 def _client_ip(request: Request) -> str:
     forwarded = request.headers.get("x-forwarded-for", "")
     if forwarded:

@@ -24,8 +24,14 @@ from community.shoutouts import (
 )
 from halo_queue import ACK_WAIT_SEC, PriorityQueue
 from llm import LLMProvider, get_provider
-from memory import ViewerMemory
+from memory import (
+    MILESTONE_VISITS,
+    GreetingShowState,
+    ViewerMemory,
+    parse_where_from,
+)
 from moderation import check_input, check_output, mute, unmute
+from segments import SegmentScheduler, merge_segment_config
 from sentinel import is_killed
 
 load_dotenv(os.path.expanduser("~/.env"))
@@ -106,6 +112,15 @@ RETURNING_LINES = [
     "Hey {name}, glad you returned. Throw a request if you want in the mix.",
     "Look who pulled up again — what's good {name}?",
 ]
+FIRST_TIME_TIP = (
+    "Tip: say play plus a track name to request, or tell me where you're listening from."
+)
+MILESTONE_LINES = [
+    "{name}, that's visit number {n} — the booth knows you now. Appreciate you.",
+    "Milestone for {name}: {n} visits. You're part of the crew.",
+    "{name} hit visit {n}. Regular energy. Welcome back to the booth.",
+]
+IN_JOKE_GAP_SEC = 15 * 60
 HYPE_LINES = [
     "That's the energy {name} — let it ride.",
     "I felt that {name}. This one was made for the chat.",
@@ -158,6 +173,7 @@ _REPLY_PRIORITY = {
     "request": 1,
     "welcome": 2,
     "new_viewer": 2,
+    "milestone": 2,
     "returning": 3,
     "question": 3,
     "hype": 4,
@@ -251,6 +267,11 @@ class CohostAgent:
         self._ai_backoff_until = 0.0
         self._last_reply_user: dict[str, float] = {}
         self._returning: set[str] = set()
+        self._greet_state = GreetingShowState()
+        self._pending_greet: dict[str, str] = {}  # greet key -> stage
+        self._segments = SegmentScheduler(clock=lambda: self._clock())
+        self._last_in_joke_at = 0.0
+        self._last_track_title: Optional[str] = None
         self._inbox: asyncio.Queue = asyncio.Queue()
         self._pending: list[dict] = []
         self._last_reply_at = 0.0
@@ -326,6 +347,9 @@ class CohostAgent:
             "queue_positions": qsnap["positions"],
             "quiet": bool(self.quiet),
             "killed": bool(is_killed()),
+            "current_segment": (self._segments.status().get("current")),
+            "listening_from": self._listening_from_list(),
+            "community_name": ((cfg.get("community") or {}).get("name") or "") or None,
         }
 
     def stop(self):
@@ -536,7 +560,7 @@ class CohostAgent:
             base = 20.0
         if self._waiting_room():
             return max(30.0, base)
-        if kind in {"welcome", "returning", "question", "mention"}:
+        if kind in {"welcome", "returning", "milestone", "question", "mention", "first_timer"}:
             return min(base, 12.0)
         return base
 
@@ -558,9 +582,46 @@ class CohostAgent:
             return "mention"
         if classified in {"welcome", "new_viewer"}:
             return "first_timer"
-        if classified in {"returning", "question", "hype", "chat"}:
+        if classified in {"returning", "milestone", "question", "hype", "chat"}:
             return "regular"
         return "regular"
+
+    def _listening_from_list(self) -> list[dict]:
+        try:
+            return self.memory.list_listening_from(limit=30)
+        except Exception:
+            logger.exception("listening_from list failed")
+            return []
+
+    def _segment_configs(self) -> list[dict]:
+        halo = self._cfg().get("halo") or {}
+        return merge_segment_config(halo.get("segments"))
+
+    def _peek_in_joke(self, now: Optional[float] = None) -> Optional[str]:
+        now = float(self._clock() if now is None else now)
+        if now - self._last_in_joke_at < IN_JOKE_GAP_SEC:
+            return None
+        jokes = (self._cfg().get("community") or {}).get("in_jokes") or []
+        if not isinstance(jokes, list):
+            return None
+        clean = [str(j).strip() for j in jokes if str(j).strip()]
+        if not clean:
+            return None
+        return random.choice(clean)
+
+    def _mark_in_joke(self, now: Optional[float] = None) -> None:
+        self._last_in_joke_at = float(self._clock() if now is None else now)
+
+    def _request_priority_for_profile(self, profile_id: Any) -> bool:
+        if profile_id is None or str(profile_id).strip() == "":
+            return False
+        try:
+            from auth import user_by_id
+
+            user = user_by_id(profile_id)
+            return bool(user and (user.get("perks") or {}).get("request_priority"))
+        except Exception:
+            return False
 
     def _platform_label(self, platform: str) -> str:
         p = (platform or "chat").strip().lower() or "chat"
@@ -634,6 +695,8 @@ class CohostAgent:
                 item["author"],
                 item["message"],
                 platform=item.get("platform") or "chat",
+                profile_id=item.get("profile_id"),
+                greet_stage=item.get("_greet_stage"),
             )
             item["_kind"] = kind
             scored.append((self._reply_priority(kind, item), item))
@@ -670,17 +733,34 @@ class CohostAgent:
         message = item["message"]
         query = self._request_query(message)
         self.requests_handled += 1
+        pid = item.get("profile_id")
         try:
             self.memory.remember_request(
                 item.get("platform") or "chat",
                 author,
                 query,
-                profile_id=item.get("profile_id"),
+                profile_id=pid,
             )
         except Exception:
             logger.exception("remember_request failed")
+        priority = self._request_priority_for_profile(pid)
         try:
-            self.enqueue_request(query=query, requester=author, via=item.get("platform") or "chat", silent=True)
+            try:
+                self.enqueue_request(
+                    query=query,
+                    requester=author,
+                    via=item.get("platform") or "chat",
+                    silent=True,
+                    priority=priority,
+                    profile_id=pid,
+                )
+            except TypeError:
+                self.enqueue_request(
+                    query=query,
+                    requester=author,
+                    via=item.get("platform") or "chat",
+                    silent=True,
+                )
         except Exception:
             logger.exception("silent request enqueue failed")
 
@@ -748,6 +828,7 @@ class CohostAgent:
             "regular": item.get("_kind") or "chat",
             "idle": "chat",
         }
+        # Preserve milestone/returning from payload when queue kind is regular
         if task.kind == "supporter":
             item["_kind"] = "mention"
             item["event_kind"] = item.get("event_kind") or "supporter"
@@ -816,17 +897,26 @@ class CohostAgent:
                 return
 
         mem_platform = (platform or "chat").strip().lower() or "chat"
+        greet_stage: Optional[str] = None
         try:
             _record, is_returning = self.memory.touch(
                 mem_platform, author, profile_id=profile_id
             )
+            gkey = GreetingShowState.key(mem_platform, author, profile_id)
             if is_returning:
-                key = (
-                    f"profile:{profile_id}"
-                    if profile_id is not None
-                    else f"{mem_platform}:{author.lower()}"
+                self._returning.add(gkey)
+            greet_stage = self._greet_state.next_stage(
+                visits=getattr(_record, "visits", 1) or 1,
+                is_new_day_return=bool(is_returning),
+                key=gkey,
+            )
+            if greet_stage:
+                self._pending_greet[gkey] = greet_stage
+            place = parse_where_from(message or "")
+            if place:
+                self.memory.set_where_from(
+                    mem_platform, author, place, profile_id=profile_id
                 )
-                self._returning.add(key)
         except Exception:
             logger.exception("viewer memory touch failed")
         now = self._clock()
@@ -838,6 +928,7 @@ class CohostAgent:
             "event_kind": ek,
             "support": support,
             "profile_id": profile_id,
+            "_greet_stage": greet_stage,
         }
         self.chat.append(item)
         if author not in self.viewers:
@@ -863,7 +954,13 @@ class CohostAgent:
                 pass
             return
 
-        classified = self._classify(author, message, platform=platform)
+        classified = self._classify(
+            author,
+            message,
+            platform=platform,
+            profile_id=profile_id,
+            greet_stage=greet_stage,
+        )
         item["_kind"] = classified
         q_kind = self._queue_kind(classified, author, platform, event_kind=ek)
         self._sync_queue_config()
@@ -928,6 +1025,30 @@ class CohostAgent:
         self._flush_supporter_bursts(now)
         self.queue.expire(now)
 
+        snap = {}
+        track: dict = {}
+        title = ""
+        bpm = None
+        try:
+            snap = self.get_snapshot() or {}
+            track = snap.get("current_track") or {}
+            title = self._short_title(track.get("filename") or "")
+            bpm = track.get("bpm")
+        except Exception:
+            logger.exception("snapshot for segments failed")
+
+        pending_track_id = None
+        if title and title != self._last_track_title:
+            prev = self._last_track_title
+            self._last_track_title = title
+            if prev is not None and not self.quiet and not dj_silent:
+                pending_track_id = self._segments.on_transition(
+                    self._segment_configs(),
+                    title=title,
+                    dj_mode=dj_mode,
+                    now=now,
+                )
+
         min_sec = self._min_reply_sec()
         due = self._last_reply_at <= 0 or (now - self._last_reply_at) >= min_sec
         budget_ok = self._reply_budget_ok(now)
@@ -953,7 +1074,12 @@ class CohostAgent:
             return (now - last) < self._user_cooldown_sec(task.kind)
 
         replied = False
-        if not self.quiet and not dj_silent and due and budget_ok:
+        if pending_track_id is not None:
+            self._say(pending_track_id.line, mood="talk")
+            self._last_reply_at = now
+            self._reply_times.append(now)
+            replied = True
+        elif not self.quiet and not dj_silent and due and budget_ok:
             task = self.queue.pop(now=now, skip_user=_skip_task)
             if task:
                 item = self._item_from_task(task)
@@ -962,6 +1088,26 @@ class CohostAgent:
                 )
                 self._last_reply_at = self._clock()
                 self._reply_times.append(self._last_reply_at)
+                replied = True
+
+        if (
+            (not replied)
+            and (not self.quiet)
+            and (not dj_silent)
+            and due
+            and budget_ok
+        ):
+            seg = self._segments.tick(
+                self._segment_configs(),
+                dj_mode=dj_mode,
+                now=now,
+                bpm=float(bpm) if bpm is not None else None,
+                title=title or None,
+            )
+            if seg:
+                self._say(seg.line, mood="hype")
+                self._last_reply_at = now
+                self._reply_times.append(now)
                 replied = True
 
         idle_blocked = (
@@ -1139,7 +1285,21 @@ class CohostAgent:
                 )
             except Exception:
                 logger.exception("remember_request failed")
-            result = self.enqueue_request(query=query, requester=author, via=platform, silent=True)
+            pid = item.get("profile_id")
+            priority = self._request_priority_for_profile(pid)
+            try:
+                result = self.enqueue_request(
+                    query=query,
+                    requester=author,
+                    via=platform,
+                    silent=True,
+                    priority=priority,
+                    profile_id=pid,
+                )
+            except TypeError:
+                result = self.enqueue_request(
+                    query=query, requester=author, via=platform, silent=True
+                )
             found = result.get("status") == "queued"
             title = self._short_title((result.get("item") or {}).get("filename") or query)
             if found:
@@ -1179,6 +1339,7 @@ class CohostAgent:
             "welcome": "greet",
             "new_viewer": "greet",
             "returning": "greet",
+            "milestone": "greet",
             "question": "questions",
             "mention": "questions",
             "hype": "hype",
@@ -1195,7 +1356,7 @@ class CohostAgent:
             "supporter",
         }:
             should = True
-        elif kind in {"welcome", "question", "mention", "new_viewer", "returning"}:
+        elif kind in {"welcome", "question", "mention", "new_viewer", "returning", "milestone"}:
             should = True
         elif kind == "hype":
             should = autonomy >= 35
@@ -1205,7 +1366,13 @@ class CohostAgent:
         if not should:
             return
 
-        fallback = self._fallback(kind, author, message, platform=platform)
+        visits = None
+        try:
+            rec = self.memory.get(platform, author, profile_id=item.get("profile_id"))
+            visits = rec.visits if rec else None
+        except Exception:
+            visits = None
+        fallback = self._fallback(kind, author, message, platform=platform, visits=visits)
         use_ai = (not demo) and energy != "eco" and (is_op or kind in {"question", "mention"})
         if use_ai:
             if is_op:
@@ -1226,12 +1393,25 @@ class CohostAgent:
                 hint=hint,
                 platform=platform,
                 max_sentences=max_sent,
+                profile_id=item.get("profile_id"),
             )
         else:
             line = clip_sentences(fallback, max_sent)
-        mood = "hype" if kind in {"hype", "welcome", "new_viewer", "returning"} else "talk"
-        if kind in {"welcome", "new_viewer", "returning"}:
+        mood = "hype" if kind in {"hype", "welcome", "new_viewer", "returning", "milestone"} else "talk"
+        if kind in {"welcome", "new_viewer", "returning", "milestone"}:
             self.greets += 1
+            gkey = self._greet_key(author, platform, item.get("profile_id"))
+            stage = item.get("_greet_stage") or self._pending_greet.get(gkey)
+            if kind in {"welcome", "new_viewer"}:
+                stage = stage or "first_time"
+            elif kind == "milestone":
+                stage = "milestone"
+            elif kind == "returning":
+                stage = "returning"
+            if stage:
+                self._greet_state.mark(gkey, stage)
+                self._pending_greet.pop(gkey, None)
+            self._returning.discard(gkey)
             self._returning.discard(f"{platform.lower()}:{user_key}")
         self._say(line, target=author, mood=mood)
         self._last_reply_user[user_key] = time.time()
@@ -1281,22 +1461,62 @@ class CohostAgent:
             options.append(f"Shoutout {random.choice(viewers)} for hanging in the stream.")
         if autonomy >= 50:
             options.extend(FOLLOW_LINES)
-        self._say(random.choice(options), mood="idle")
+        joke = self._peek_in_joke()
+        joke_line = None
+        if joke:
+            cname = ((self._cfg().get("community") or {}).get("name") or "").strip()
+            prefix = f"{cname}: " if cname else ""
+            joke_line = f"{prefix}{joke}"
+            options.append(joke_line)
+        chosen = random.choice(options)
+        if joke_line and chosen == joke_line:
+            self._mark_in_joke()
+        self._say(chosen, mood="idle")
 
-    def _classify(self, author: str, message: str, platform: str = "chat") -> str:
+    def _greet_key(self, author: str, platform: str = "chat", profile_id: Any = None) -> str:
+        return GreetingShowState.key(platform or "chat", author, profile_id)
+
+    def _classify(
+        self,
+        author: str,
+        message: str,
+        platform: str = "chat",
+        *,
+        profile_id: Any = None,
+        greet_stage: Optional[str] = None,
+    ) -> str:
         if REQUEST_RE.search(message) or message.lower().startswith("!request"):
             return "request"
         if QUESTION_RE.search(message):
             return "question"
         if MENTION_RE.search(message):
             return "mention"
-        mem_key = f"{(platform or 'chat').lower()}:{author.lower()}"
-        if mem_key in self._returning:
+        gkey = self._greet_key(author, platform, profile_id)
+        stage = greet_stage or self._pending_greet.get(gkey)
+        greeted = (
+            self._greet_state.already(gkey, "first_time")
+            or self._greet_state.already(gkey, "returning")
+            or self._greet_state.already(gkey, "milestone")
+        )
+        if stage == "first_time" and not greeted:
+            return "welcome" if GREET_RE.search(message) else "new_viewer"
+        if stage == "milestone" and not greeted:
+            return "milestone"
+        if (
+            not greeted
+            and (
+                stage == "returning"
+                or gkey in self._returning
+                or f"{(platform or 'chat').lower()}:{author.lower()}" in self._returning
+            )
+        ):
             return "returning"
-        is_new = author.lower() not in self._last_reply_user and (time.time() - self.viewers.get(author, 0) < 2)
+        is_new = (not greeted) and author.lower() not in self._last_reply_user and (
+            self._clock() - self.viewers.get(author, 0) < 2
+        )
         if is_new:
             return "welcome" if GREET_RE.search(message) else "new_viewer"
-        if GREET_RE.search(message):
+        if GREET_RE.search(message) and not greeted:
             return "welcome"
         if HYPE_RE.search(message):
             return "hype"
@@ -1310,14 +1530,32 @@ class CohostAgent:
             return message.split(" ", 1)[1].strip()
         return message
 
-    def _fallback(self, kind: str, author: str, message: str, platform: str = "chat") -> str:
+    def _fallback(
+        self,
+        kind: str,
+        author: str,
+        message: str,
+        platform: str = "chat",
+        *,
+        visits: int | None = None,
+    ) -> str:
+        if kind == "milestone":
+            n = int(visits or 0)
+            if n not in MILESTONE_VISITS:
+                for m in MILESTONE_VISITS:
+                    if visits and visits >= m:
+                        n = m
+            n = n or 5
+            return random.choice(MILESTONE_LINES).format(name=author, n=n)
         if kind == "returning":
             return random.choice(RETURNING_LINES).format(name=author)
         if kind in {"welcome", "new_viewer"}:
             prep, label = self._platform_phrase(platform)
             if (platform or "").strip().lower() not in {"", "chat", "demo", "dashboard"}:
-                return f"{author} {prep} {label} just pulled up — welcome to the booth!"
-            return random.choice(WELCOME_LINES).format(name=author)
+                base = f"{author} {prep} {label} just pulled up — welcome to the booth!"
+            else:
+                base = random.choice(WELCOME_LINES).format(name=author)
+            return f"{base} {FIRST_TIME_TIP}"
         if kind == "hype":
             return random.choice(HYPE_LINES).format(name=author)
         if kind == "question":

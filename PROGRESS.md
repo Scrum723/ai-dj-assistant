@@ -14,7 +14,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] A5 — Priority queue and Halo Waiting Room 24/7 mode — PriorityQueue + cohost pull budget/cooldown, wait acks, waiting-room idle, /state queue fields; aggregator operator skip_rate
 - [x] A6 — Supporter shoutouts — ChatMessage.support + adapter fixtures (YT/Twitch/Kick/TikTok), burst thank-yous at supporter priority, overlay/room highlight, GET /community/supporters/today; amounts spoken only if halo.say_amounts
 - [x] B3 — Booth pass identity — Google/Facebook OAuth callbacks (signed state, mocked tests), apple/tiktok 501; identity.py linked_handles + !link CODE; Aggregator profile_id; memory merge by profile_id; Profile.jsx; request_priority perk
-- [ ] A7 — Regulars, recurring segments and rituals
+- [x] A7 — Regulars, recurring segments and rituals — greeting SM (first/returning/milestone once per show), where_from + favourite_genres memory, segments.py scheduler + Room listening-from/segment UI, community in-jokes ≤1/15m; chat-path request_priority
 - [ ] B4 — Adapters with official APIs (Kick, Facebook, Rumble, YouTube official)
 - [ ] B5 — Experimental adapters: TikTok LIVE and X
 - [ ] B6 — Unified moderation and ban sync

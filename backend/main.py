@@ -830,6 +830,18 @@ def community_supporters_today():
     return {"supporters": [], "day": time.strftime("%Y-%m-%d", time.gmtime())}
 
 
+@app.get("/community/listening-from")
+def community_listening_from():
+    """Opt-in 'where from' map for Room (text viewers volunteered)."""
+    if agent:
+        return {
+            "listening_from": agent._listening_from_list(),
+            "current_segment": (agent._segments.status().get("current")),
+            "community_name": ((agent._cfg().get("community") or {}).get("name") or "") or None,
+        }
+    return {"listening_from": [], "current_segment": None, "community_name": None}
+
+
 @app.post("/agent/demo")
 def set_demo(req: DemoRequest, _auth: None = Depends(require_operator)):
     if not agent:

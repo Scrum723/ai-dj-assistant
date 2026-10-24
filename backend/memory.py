@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -40,6 +41,73 @@ def ordinal(n: int) -> str:
     return f"{n}{suffix}"
 
 
+MILESTONE_VISITS = (5, 10, 25)
+
+# Common genre tokens pulled from request text
+_GENRE_TOKENS = (
+    "dnb",
+    "drum and bass",
+    "drum & bass",
+    "house",
+    "techno",
+    "trance",
+    "dubstep",
+    "garage",
+    "breakbeat",
+    "breaks",
+    "ambient",
+    "jungle",
+    "hardstyle",
+    "trap",
+    "hip hop",
+    "hip-hop",
+    "rap",
+    "edm",
+    "synthwave",
+    "disco",
+    "funk",
+    "soul",
+    "bass",
+    "ukg",
+    "footwork",
+)
+
+_WHERE_FROM_RE = re.compile(
+    r"(?i)\b(?:(?:i(?:'?m| am)\s+(?:from|in)|from|listening\s+from|watching\s+from|"
+    r"tuning\s+in\s+from|here\s+from|calling\s+in\s+from)\s+)"
+    r"([A-Za-z][A-Za-z .'\-]{1,40})"
+)
+_WHERE_TRAIL_RE = re.compile(
+    r"(?i)\s+(and|but|so|lol|haha|tonight|today|chat|here)\b.*$"
+)
+
+
+def parse_where_from(message: str) -> Optional[str]:
+    """Extract an opt-in location phrase if the viewer volunteered it."""
+    text = (message or "").strip()
+    if not text:
+        return None
+    m = _WHERE_FROM_RE.search(text)
+    if not m:
+        return None
+    place = m.group(1).strip(" .,!?;:")
+    place = _WHERE_TRAIL_RE.sub("", place).strip(" .,!?;:")
+    if len(place) < 2 or len(place) > 48:
+        return None
+    return place
+
+
+def genres_from_request(query: str) -> list[str]:
+    q = (query or "").strip().lower()
+    if not q:
+        return []
+    found: list[str] = []
+    for token in _GENRE_TOKENS:
+        if token in q and token not in found:
+            found.append(token)
+    return found
+
+
 @dataclass
 class ViewerRecord:
     platform: str
@@ -50,14 +118,69 @@ class ViewerRecord:
     visits: int
     last_request: Optional[str]
     note: Optional[str]
+    where_from: Optional[str] = None
+    favourite_genres: Optional[str] = None  # comma-separated
+
+    def genres_list(self) -> list[str]:
+        raw = (self.favourite_genres or "").strip()
+        if not raw:
+            return []
+        return [g.strip() for g in raw.split(",") if g.strip()]
 
     def memory_line(self) -> str:
         parts = [f"{ordinal(self.visits)} visit"]
         if self.last_request:
             parts.append(f"last asked for {self.last_request}")
+        if self.where_from:
+            parts.append(f"listening from {self.where_from}")
+        genres = self.genres_list()
+        if genres:
+            parts.append("likes " + ", ".join(genres[:4]))
         if self.note:
             parts.append(self.note)
         return "Viewer memory: " + ", ".join(parts)
+
+
+class GreetingShowState:
+    """Greeting stages that fire at most once per profile per show."""
+
+    STAGES = ("first_time", "returning", "milestone")
+
+    def __init__(self) -> None:
+        self._fired: dict[str, set[str]] = {}
+
+    def reset_show(self) -> None:
+        self._fired.clear()
+
+    @staticmethod
+    def key(platform: str, handle: str, profile_id: Optional[str | int] = None) -> str:
+        if profile_id is not None and str(profile_id).strip():
+            return f"profile:{str(profile_id).strip()}"
+        return f"{_norm_platform(platform)}:{_norm_handle(handle)}"
+
+    def already(self, key: str, stage: str) -> bool:
+        return stage in self._fired.get(key, set())
+
+    def mark(self, key: str, stage: str) -> None:
+        self._fired.setdefault(key, set()).add(stage)
+
+    def next_stage(
+        self,
+        *,
+        visits: int,
+        is_new_day_return: bool,
+        key: str,
+    ) -> Optional[str]:
+        """Pick greeting stage for this appearance. None if already greeted this show."""
+        visits = int(visits or 0)
+        fired = self._fired.setdefault(key, set())
+        if visits <= 1:
+            return None if "first_time" in fired else "first_time"
+        if visits in MILESTONE_VISITS and "milestone" not in fired:
+            return "milestone"
+        if (is_new_day_return or visits >= 2) and "returning" not in fired:
+            return "returning"
+        return None
 
 
 class ViewerMemory:
@@ -90,13 +213,21 @@ class ViewerMemory:
                     visits INTEGER NOT NULL DEFAULT 1,
                     last_request TEXT,
                     note TEXT,
+                    where_from TEXT,
+                    favourite_genres TEXT,
                     PRIMARY KEY (platform, handle)
                 )
                 """
             )
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(viewers)").fetchall()}
+            if "where_from" not in cols:
+                conn.execute("ALTER TABLE viewers ADD COLUMN where_from TEXT")
+            if "favourite_genres" not in cols:
+                conn.execute("ALTER TABLE viewers ADD COLUMN favourite_genres TEXT")
             conn.commit()
 
     def _row_to_record(self, row: sqlite3.Row) -> ViewerRecord:
+        keys = row.keys()
         return ViewerRecord(
             platform=row["platform"],
             handle=row["handle"],
@@ -106,6 +237,8 @@ class ViewerMemory:
             visits=int(row["visits"]),
             last_request=row["last_request"],
             note=row["note"],
+            where_from=row["where_from"] if "where_from" in keys else None,
+            favourite_genres=row["favourite_genres"] if "favourite_genres" in keys else None,
         )
 
     def _merged_for_profile(self, conn: sqlite3.Connection, profile_id: str) -> Optional[ViewerRecord]:
@@ -118,14 +251,23 @@ class ViewerMemory:
         first_seen = min(float(r["first_seen"]) for r in rows)
         last_seen = max(float(r["last_seen"]) for r in rows)
         visits = max(int(r["visits"]) for r in rows)
-        # Prefer most recently updated request/note
         last_request = None
         note = None
+        where_from = None
+        genre_set: list[str] = []
         for r in rows:
+            keys = r.keys()
             if last_request is None and r["last_request"]:
                 last_request = r["last_request"]
             if note is None and r["note"]:
                 note = r["note"]
+            if where_from is None and "where_from" in keys and r["where_from"]:
+                where_from = r["where_from"]
+            if "favourite_genres" in keys and r["favourite_genres"]:
+                for g in str(r["favourite_genres"]).split(","):
+                    g = g.strip()
+                    if g and g not in genre_set:
+                        genre_set.append(g)
         top = rows[0]
         return ViewerRecord(
             platform=top["platform"],
@@ -136,6 +278,8 @@ class ViewerMemory:
             visits=visits,
             last_request=last_request,
             note=note,
+            where_from=where_from,
+            favourite_genres=",".join(genre_set) if genre_set else None,
         )
 
     def attach_profile(self, platform: str, handle: str, profile_id: str | int) -> Optional[ViewerRecord]:
@@ -240,8 +384,9 @@ class ViewerMemory:
                 conn.execute(
                     """
                     INSERT INTO viewers
-                    (platform, handle, profile_id, first_seen, last_seen, visits, last_request, note)
-                    VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
+                    (platform, handle, profile_id, first_seen, last_seen, visits,
+                     last_request, note, where_from, favourite_genres)
+                    VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)
                     """,
                     (platform, handle, pid, first_seen, now, visits),
                 )
@@ -255,6 +400,8 @@ class ViewerMemory:
                     visits=visits,
                     last_request=None,
                     note=None,
+                    where_from=None,
+                    favourite_genres=None,
                 )
                 if pid:
                     merged = self._merged_for_profile(conn, pid)
@@ -287,6 +434,7 @@ class ViewerMemory:
                 (now, visits, new_pid, first_seen, platform, handle),
             )
             conn.commit()
+            keys = row.keys()
             rec = ViewerRecord(
                 platform=platform,
                 handle=handle,
@@ -296,6 +444,8 @@ class ViewerMemory:
                 visits=visits,
                 last_request=row["last_request"],
                 note=row["note"],
+                where_from=row["where_from"] if "where_from" in keys else None,
+                favourite_genres=row["favourite_genres"] if "favourite_genres" in keys else None,
             )
             if new_pid:
                 merged = self._merged_for_profile(conn, str(new_pid))
@@ -354,6 +504,9 @@ class ViewerMemory:
         if not handle or not request:
             return
         self.touch(platform, handle, profile_id=profile_id)
+        genres = genres_from_request(request)
+        if genres:
+            self.add_genres(platform, handle, genres, profile_id=profile_id)
         with self._connect() as conn:
             if note is not None:
                 conn.execute(
@@ -391,3 +544,107 @@ class ViewerMemory:
                         (request, str(pid)),
                     )
             conn.commit()
+
+    def set_where_from(
+        self,
+        platform: str,
+        handle: str,
+        where_from: str,
+        *,
+        profile_id: Optional[str | int] = None,
+    ) -> None:
+        platform = _norm_platform(platform)
+        handle = _norm_handle(handle)
+        place = (where_from or "").strip()[:80]
+        if not handle or not place:
+            return
+        self.touch(platform, handle, profile_id=profile_id)
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE viewers SET where_from = ? WHERE platform = ? AND handle = ?",
+                (place, platform, handle),
+            )
+            row = conn.execute(
+                "SELECT profile_id FROM viewers WHERE platform = ? AND handle = ?",
+                (platform, handle),
+            ).fetchone()
+            pid = (profile_id and str(profile_id)) or (row["profile_id"] if row else None)
+            if pid:
+                conn.execute(
+                    "UPDATE viewers SET where_from = ? WHERE profile_id = ?",
+                    (place, str(pid)),
+                )
+            conn.commit()
+
+    def add_genres(
+        self,
+        platform: str,
+        handle: str,
+        genres: list[str],
+        *,
+        profile_id: Optional[str | int] = None,
+    ) -> None:
+        platform = _norm_platform(platform)
+        handle = _norm_handle(handle)
+        incoming = [g.strip().lower() for g in (genres or []) if g and g.strip()]
+        if not handle or not incoming:
+            return
+        self.touch(platform, handle, profile_id=profile_id)
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT favourite_genres, profile_id FROM viewers WHERE platform = ? AND handle = ?",
+                (platform, handle),
+            ).fetchone()
+            existing: list[str] = []
+            if row and row["favourite_genres"]:
+                existing = [g.strip() for g in str(row["favourite_genres"]).split(",") if g.strip()]
+            for g in incoming:
+                if g not in existing:
+                    existing.append(g)
+            existing = existing[:8]
+            joined = ",".join(existing)
+            conn.execute(
+                "UPDATE viewers SET favourite_genres = ? WHERE platform = ? AND handle = ?",
+                (joined, platform, handle),
+            )
+            pid = (profile_id and str(profile_id)) or (row["profile_id"] if row else None)
+            if pid:
+                conn.execute(
+                    "UPDATE viewers SET favourite_genres = ? WHERE profile_id = ?",
+                    (joined, str(pid)),
+                )
+            conn.commit()
+
+    def list_listening_from(self, *, limit: int = 40) -> list[dict]:
+        """Opt-in where_from entries for Room UI (most recent first)."""
+        limit = max(1, min(int(limit), 100))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT handle, platform, where_from, profile_id, last_seen
+                FROM viewers
+                WHERE where_from IS NOT NULL AND TRIM(where_from) != ''
+                ORDER BY last_seen DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        seen: set[str] = set()
+        out: list[dict] = []
+        for r in rows:
+            place = (r["where_from"] or "").strip()
+            if not place:
+                continue
+            dedupe = str(r["profile_id"] or "") or f"{r['platform']}:{r['handle']}"
+            if dedupe in seen:
+                continue
+            seen.add(dedupe)
+            out.append(
+                {
+                    "handle": r["handle"],
+                    "platform": r["platform"],
+                    "where_from": place,
+                    "profile_id": r["profile_id"],
+                }
+            )
+        return out

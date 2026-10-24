@@ -61,6 +61,8 @@ export default function Room({ state, refresh }) {
   const [filter, setFilter] = useState('all');
   const [presence, setPresence] = useState({ counts: {}, total: 0 });
   const [supporters, setSupporters] = useState([]);
+  const [listeningFrom, setListeningFrom] = useState([]);
+  const [currentSegment, setCurrentSegment] = useState(null);
   const [highlight, setHighlight] = useState(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -117,6 +119,15 @@ export default function Room({ state, refresh }) {
       try {
         const s = await fetch(`${API}/community/supporters/today`).then((r) => r.json());
         if (!cancelled && s?.supporters) setSupporters(s.supporters);
+      } catch {
+        /* optional */
+      }
+      try {
+        const lf = await fetch(`${API}/community/listening-from`).then((r) => r.json());
+        if (!cancelled) {
+          if (lf?.listening_from) setListeningFrom(lf.listening_from);
+          if (lf?.current_segment !== undefined) setCurrentSegment(lf.current_segment);
+        }
       } catch {
         /* optional */
       }
@@ -218,6 +229,11 @@ export default function Room({ state, refresh }) {
     }
   }, [liveChat]);
 
+  useEffect(() => {
+    if (agent?.listening_from) setListeningFrom(agent.listening_from);
+    if (agent?.current_segment !== undefined) setCurrentSegment(agent.current_segment || null);
+  }, [agent?.listening_from, agent?.current_segment]);
+
   const viewers = agent.viewers || [];
   const fallbackChat = agent.chat || [];
   const chat = liveChat.length ? liveChat : fallbackChat.map((line) => ({
@@ -275,7 +291,17 @@ export default function Room({ state, refresh }) {
       <aside style={card}>
         <RoomUrls urls={state?.room_urls} copy={copy} />
         <div style={{ color: '#c4b5fd', fontSize: 12, letterSpacing: 1.4, fontWeight: 700, marginTop: 16 }}>NOW PLAYING</div>
-        <h3 style={{ margin: '8px 0 16px' }}>{title}</h3>
+        <h3 style={{ margin: '8px 0 8px' }}>{title}</h3>
+        {currentSegment?.name && (
+          <div style={{
+            marginBottom: 14, padding: '8px 10px', borderRadius: 8,
+            background: '#312e81', border: '1px solid #818cf8', fontSize: 13,
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 1.2, color: '#c4b5fd' }}>SEGMENT</div>
+            <div style={{ fontWeight: 700, textTransform: 'capitalize' }}>{String(currentSegment.name).replace(/_/g, ' ')}</div>
+            {currentSegment.line && <div style={{ color: '#e0e7ff', marginTop: 4, fontSize: 12 }}>{currentSegment.line}</div>}
+          </div>
+        )}
         <div style={{ margin: '16px 0 18px' }}>
           <div style={{ color: '#c4b5fd', fontSize: 12, letterSpacing: 1.4, fontWeight: 700, marginBottom: 8 }}>WATCH LIVE</div>
           <StreamLinks settings={settings} compact />
@@ -300,6 +326,18 @@ export default function Room({ state, refresh }) {
               {v !== nick && <button onClick={() => wave(v)} style={tiny}>wave</button>}
             </li>
           ))}
+        </ul>
+        <div style={{ color: '#6ee7b7', fontSize: 12, letterSpacing: 1.4, fontWeight: 700, marginTop: 18 }}>
+          LISTENING FROM ({listeningFrom.length})
+        </div>
+        <ul style={{ listStyle: 'none', padding: 0, marginTop: 10, maxHeight: 140, overflow: 'auto' }}>
+          {listeningFrom.map((row) => (
+            <li key={`${row.platform}:${row.handle}`} style={{ padding: '6px 0', borderBottom: '1px solid #2d2d2d', fontSize: 13 }}>
+              <span style={{ fontWeight: 700 }}>{row.handle}</span>
+              <span style={{ color: '#9ca3af' }}> · {row.where_from}</span>
+            </li>
+          ))}
+          {!listeningFrom.length && <li style={{ color: '#6b7280', fontSize: 13 }}>Say where you&apos;re listening from in chat</li>}
         </ul>
         <div style={{ color: '#f9a8d4', fontSize: 12, letterSpacing: 1.4, fontWeight: 700, marginTop: 18 }}>
           SUPPORTERS TODAY ({supporters.length})
