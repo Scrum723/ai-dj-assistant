@@ -50,8 +50,34 @@ export default function Settings({ state, refresh }) {
         <label style={lab}>Name
           <input value={halo.name} onChange={(e) => setHalo({ name: e.target.value })} style={inp} />
         </label>
-        <label style={lab}>Persona
-          <textarea value={halo.persona} onChange={(e) => setHalo({ persona: e.target.value })} style={{ ...inp, minHeight: 120 }} />
+        <label style={lab}>Persona style
+          <select
+            value={halo.persona_preset || 'hype'}
+            onChange={(e) => setHalo({ persona_preset: e.target.value })}
+            style={inp}
+          >
+            <option value="hype">Hype — warm booth partner</option>
+            <option value="chill">Chill — calm and unhurried</option>
+            <option value="host">Host — clear room host</option>
+            <option value="custom">Custom — write your own</option>
+          </select>
+        </label>
+        {(halo.persona_preset || 'hype') === 'custom' && (
+          <label style={lab}>Custom persona
+            <textarea
+              value={halo.persona || ''}
+              onChange={(e) => setHalo({ persona: e.target.value })}
+              style={{ ...inp, minHeight: 120 }}
+            />
+          </label>
+        )}
+        <label style={{ display: 'flex', gap: 8, margin: '12px 0', color: '#e5e7eb' }}>
+          <input
+            type="checkbox"
+            checked={!!halo.dj_mode_silent}
+            onChange={(e) => setHalo({ dj_mode_silent: e.target.checked })}
+          />
+          Mute all Halo speech (legacy silent DJ mode)
         </label>
         <label style={lab}>Voice engine
           <select value={halo.voice_provider} onChange={(e) => setHalo({ voice_provider: e.target.value })} style={inp}>

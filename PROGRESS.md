@@ -10,7 +10,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] B1 — Aggregator core + unified room v1 — ChatMessage schema, YouTube/Twitch adapters, Aggregator dedupe+moderation fan-out, /ws/room, Room+overlay badges; adapters disabled by default
 - [x] B2 — Room history, presence and live-room UX — SQLite scrollback + retention, presence per platform + room sockets, Room.jsx filters/reconnect/dedupe
 - [x] A3 — Halo speaks to the merged room, with cost and latency controls — Aggregator feed context + platform tags, min_reply_sec selection, /metrics + daily cap, Halo→Aggregator publish
-- [ ] A4 — Persona, voice and DJ mode
+- [x] A4 — Persona, voice and DJ mode — persona presets (hype/chill/host/custom), DJ quiet (mentions/requests/operator), operator skip rate/cooldown, TTS 4s timeout fallback, dj_mode_silent for old mute
 - [ ] A5 — Priority queue and Halo Waiting Room 24/7 mode
 - [ ] A6 — Supporter shoutouts
 - [ ] B3 — Booth pass identity
@@ -29,7 +29,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 
 ## Blocked on Charles
 
-_(none yet)_
+- A4: Listen test of macOS `say` voices and ElevenLabs in OBS (not run here; do not invent results).
 
 ## Notes / deviations
 

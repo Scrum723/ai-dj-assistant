@@ -41,6 +41,25 @@ PERSONA = (
     "Reply in 1-2 spoken sentences. No hashtags, no URLs, no emojis, no 'as an AI'."
 )
 
+PERSONA_PRESETS = {
+    "hype": PERSONA,
+    "chill": (
+        "You are Halo, the calm booth partner inside DJ Bot Botty "
+        "(Charles Clottin / A Geostrophic Flow). Keep the room warm and unhurried: "
+        "greet softly, acknowledge requests, answer briefly. Low energy, no shouting. "
+        "Reply in 1-2 spoken sentences. No hashtags, no URLs, no emojis, no 'as an AI'."
+    ),
+    "host": (
+        "You are Halo, the clear room host inside DJ Bot Botty "
+        "(Charles Clottin / A Geostrophic Flow). Introduce people, take requests, "
+        "answer questions, and keep the booth organized. Professional and friendly. "
+        "Reply in 1-2 spoken sentences. No hashtags, no URLs, no emojis, no 'as an AI'."
+    ),
+}
+PERSONA_PRESET_IDS = ("hype", "chill", "host", "custom")
+
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
 IGNORE_USERS = {
     "nightbot",
     "streamelements",
@@ -157,6 +176,17 @@ def _estimate_tokens(*parts: str) -> int:
     return max(1, total // 4)
 
 
+def clip_sentences(text: str, max_sentences: int) -> str:
+    """Keep the first N sentences (spoken-line friendly)."""
+    text = (text or "").strip()
+    if not text or max_sentences <= 0:
+        return text
+    parts = [p.strip() for p in _SENTENCE_SPLIT.split(text) if p.strip()]
+    if len(parts) <= max_sentences:
+        return text
+    return " ".join(parts[:max_sentences])
+
+
 class CohostAgent:
     def __init__(
         self,
@@ -221,15 +251,27 @@ class CohostAgent:
     def _halo_name(self) -> str:
         return (self._cfg().get("halo") or {}).get("name") or AGENT_NAME
 
+    def _persona(self) -> str:
+        """Active system persona from preset or custom text (live settings, no restart)."""
+        halo = self._cfg().get("halo") or {}
+        preset = str(halo.get("persona_preset") or "hype").strip().lower()
+        if preset not in PERSONA_PRESET_IDS:
+            preset = "hype"
+        if preset == "custom":
+            custom = (halo.get("persona") or "").strip()
+            return custom or PERSONA
+        return PERSONA_PRESETS.get(preset) or PERSONA
+
     def status(self) -> dict[str, Any]:
         cfg = self._cfg()
         halo = cfg.get("halo") or {}
         env = cfg.get("environment") or {}
+        quiet_mood = bool(halo.get("dj_mode") or halo.get("dj_mode_silent"))
         return {
             "name": self._halo_name(),
             "running": self.running,
             "demo": self.demo,
-            "mood": "quiet" if halo.get("dj_mode") else self.mood,
+            "mood": "quiet" if quiet_mood else self.mood,
             "youtube_id": self.youtube_id,
             "ai_online": bool(self._llm and self._llm.available),
             "last_target": self.last_target,
@@ -240,6 +282,8 @@ class CohostAgent:
             "greets": self.greets,
             "requests_handled": self.requests_handled,
             "dj_mode": bool(halo.get("dj_mode")),
+            "dj_mode_silent": bool(halo.get("dj_mode_silent")),
+            "persona_preset": str(halo.get("persona_preset") or "hype"),
             "energy_mode": env.get("energy_mode") or "balanced",
             "vibe": env.get("vibe") or "night",
             "listen_mic": bool(halo.get("listen_mic")),
@@ -373,7 +417,9 @@ class CohostAgent:
             return f"{total} here"
         return f"{total} here: {', '.join(parts)}"
 
-    def _reply_priority(self, kind: str) -> int:
+    def _reply_priority(self, kind: str, item: dict | None = None) -> int:
+        if item and self._is_operator(item.get("author") or "", item.get("platform") or "chat"):
+            return -1
         return int(_REPLY_PRIORITY.get(kind, 4))
 
     def _select_from_batch(self, batch: list[dict]) -> tuple[list[dict], str]:
@@ -386,7 +432,7 @@ class CohostAgent:
                 platform=item.get("platform") or "chat",
             )
             item["_kind"] = kind
-            scored.append((self._reply_priority(kind), item))
+            scored.append((self._reply_priority(kind, item), item))
         scored.sort(key=lambda x: (x[0], float(x[1].get("ts") or 0)))
         if not scored:
             return [], "single"
@@ -429,17 +475,48 @@ class CohostAgent:
         except Exception:
             logger.exception("silent request enqueue failed")
 
-    def _operator_handles(self) -> set[str]:
+    def _operator_handles(self, platform: str | None = None) -> set[str]:
+        """Handles that count as operator. List (any platform) or dict keyed by platform."""
         raw = (self._cfg().get("halo") or {}).get("operator_handles")
+        plat = (platform or "").strip().lower() or None
+        if isinstance(raw, dict) and raw:
+            if plat:
+                val = raw.get(plat) or raw.get(platform or "")
+                if isinstance(val, (list, tuple)):
+                    return {str(h).strip().lower() for h in val if str(h).strip()}
+                if val is not None and str(val).strip():
+                    return {str(val).strip().lower()}
+                return set()
+            out: set[str] = set()
+            for val in raw.values():
+                if isinstance(val, (list, tuple)):
+                    out.update(str(h).strip().lower() for h in val if str(h).strip())
+                elif val is not None and str(val).strip():
+                    out.add(str(val).strip().lower())
+            return out or set(DEFAULT_OPERATOR_HANDLES)
         if isinstance(raw, list) and raw:
             return {str(h).strip().lower() for h in raw if str(h).strip()}
         return set(DEFAULT_OPERATOR_HANDLES)
 
     def _is_operator(self, author: str, platform: str = "chat") -> bool:
-        if (author or "").strip().lower() in self._operator_handles():
-            return True
         # Dashboard "Talk to Halo" is the booth operator console
-        return (platform or "").strip().lower() == "dashboard"
+        if (platform or "").strip().lower() == "dashboard":
+            return True
+        key = (author or "").strip().lower()
+        if not key:
+            return False
+        return key in self._operator_handles(platform)
+
+    def _is_dj_priority(self, item: dict) -> bool:
+        """Mentions, requests, and operator — the only talkers in DJ quiet mode."""
+        author = item.get("author") or ""
+        platform = item.get("platform") or "chat"
+        if self._is_operator(author, platform):
+            return True
+        kind = item.get("_kind") or self._classify(
+            author, item.get("message") or "", platform=platform
+        )
+        return kind in {"mention", "request"}
 
     def _handle_operator_command(self, author: str, message: str, platform: str) -> bool:
         if not self._is_operator(author, platform):
@@ -484,7 +561,12 @@ class CohostAgent:
             return
 
         if not from_aggregator:
-            ok, reason = check_input(author, message, settings=self._cfg())
+            ok, reason = check_input(
+                author,
+                message,
+                settings=self._cfg(),
+                skip_rate=self._is_operator(author, platform),
+            )
             if not ok:
                 logger.info("moderation drop author=%s reason=%s", author, reason)
                 return
@@ -521,7 +603,8 @@ class CohostAgent:
         if not self._intro_done:
             self._intro_done = True
             name = self._halo_name()
-            if not (self._cfg().get("halo") or {}).get("dj_mode"):
+            halo0 = self._cfg().get("halo") or {}
+            if not halo0.get("dj_mode") and not halo0.get("dj_mode_silent"):
                 self._say(
                     f"{name} in the booth. Chat with me — request a song, say hey, or tell me where you're watching from.",
                     mood="hype",
@@ -544,6 +627,7 @@ class CohostAgent:
         env = cfg.get("environment") or {}
         caps = halo.get("capabilities") or {}
         dj_mode = bool(halo.get("dj_mode"))
+        dj_silent = bool(halo.get("dj_mode_silent"))
         energy = env.get("energy_mode") or "balanced"
         distraction = int(env.get("distraction") or 30)
         autonomy = int(cfg.get("autonomy") or self.get_autonomy())
@@ -556,17 +640,23 @@ class CohostAgent:
                 break
 
         min_sec = self._min_reply_sec()
-        if self._pending and not self.quiet:
+        if self._pending and not self.quiet and not dj_silent:
             due = self._last_reply_at <= 0 or (now - self._last_reply_at) >= min_sec
+            # DJ quiet: answer mention/request/operator promptly (≤3s), stay silent otherwise
+            if not due and dj_mode and any(self._is_dj_priority(it) for it in self._pending):
+                due = True
             if due:
                 batch = self._pending
                 self._pending = []
-                await self._handle_batch(
-                    batch, autonomy, dj_mode=dj_mode, caps=caps, energy=energy
-                )
-                self._last_reply_at = time.time()
+                if dj_mode:
+                    batch = [it for it in batch if self._is_dj_priority(it)]
+                if batch:
+                    await self._handle_batch(
+                        batch, autonomy, dj_mode=dj_mode, caps=caps, energy=energy
+                    )
+                    self._last_reply_at = time.time()
 
-        if self.quiet or dj_mode or not caps.get("idle_talk", True) or energy == "eco":
+        if self.quiet or dj_mode or dj_silent or not caps.get("idle_talk", True) or energy == "eco":
             idle_every = 120.0
         else:
             base = {"balanced": 42.0, "show": 20.0}.get(energy, 42.0)
@@ -574,6 +664,7 @@ class CohostAgent:
         if (
             (not self.quiet)
             and (not dj_mode)
+            and (not dj_silent)
             and caps.get("idle_talk", True)
             and now - self._last_idle >= idle_every
             and self._inbox.empty()
@@ -582,7 +673,13 @@ class CohostAgent:
             self._idle_line(autonomy, caps)
             self._last_idle = now
 
-        demo_ok = self.demo and energy != "eco" and not dj_mode and not self.quiet
+        demo_ok = (
+            self.demo
+            and energy != "eco"
+            and not dj_mode
+            and not dj_silent
+            and not self.quiet
+        )
         if demo_ok and now - self.last_real_chat > 25:
             gap = 32.0 + random.uniform(0, 14)
             if now >= self._next_demo:
@@ -629,23 +726,27 @@ class CohostAgent:
     async def _handle_chat(self, item: dict, autonomy: int, dj_mode: bool = False, caps: dict | None = None, energy: str = "balanced"):
         author = item["author"]
         message = item["message"]
-        kind = item.get("_kind") or self._classify(
-            author, message, platform=item.get("platform") or "chat"
-        )
+        platform = item.get("platform") or "chat"
+        kind = item.get("_kind") or self._classify(author, message, platform=platform)
         self.mood = "listening"
         caps = caps or {}
+        is_op = self._is_operator(author, platform)
+        # DJ quiet: only mentions, requests, operator (max 1 sentence unless operator)
+        if dj_mode and not is_op and kind not in {"mention", "request"}:
+            return
+        max_sent = 3 if is_op else (1 if dj_mode else 2)
 
-        demo = item.get("platform") == "demo"
+        demo = platform == "demo"
         if kind == "request":
             if not caps.get("requests", True):
                 return
             query = self._request_query(message)
             self.requests_handled += 1
             try:
-                self.memory.remember_request(item.get("platform") or "chat", author, query)
+                self.memory.remember_request(platform, author, query)
             except Exception:
                 logger.exception("remember_request failed")
-            result = self.enqueue_request(query=query, requester=author, via=item["platform"], silent=True)
+            result = self.enqueue_request(query=query, requester=author, via=platform, silent=True)
             found = result.get("status") == "queued"
             title = self._short_title((result.get("item") or {}).get("filename") or query)
             if found:
@@ -653,27 +754,34 @@ class CohostAgent:
             else:
                 line = f"I don't have {query} in this crate {author}, but I logged it. Name another track."
             if not demo and energy != "eco":
+                hint = "They requested a song. Confirm the queue in one short spoken line and say the title."
+                if is_op:
+                    hint = "Operator request. Confirm in up to 2-3 short spoken sentences."
+                elif dj_mode:
+                    hint = "DJ mode: one short sentence confirming the queue and title."
                 line = await self._compose(
                     author,
                     message,
                     fallback=line,
-                    hint="They requested a song. Confirm the queue in one short spoken line and say the title.",
-                    platform=item.get("platform") or "chat",
+                    hint=hint,
+                    platform=platform,
+                    max_sentences=max_sent,
                 )
-            if dj_mode:
-                return
+            else:
+                line = clip_sentences(line, max_sent)
             self._say(line, target=author, mood="hype")
+            if is_op:
+                self._last_reply_user[author.lower()] = time.time()
             return
 
         user_key = author.lower()
         last = self._last_reply_user.get(user_key, 0)
         cooldown = 12 if kind in {"welcome", "returning", "question", "mention"} else 28
-        if time.time() - last < cooldown and kind not in {"request"}:
+        # Operator skips per-user cooldown
+        if (not is_op) and time.time() - last < cooldown and kind not in {"request"}:
             return
 
         should = False
-        if dj_mode:
-            return
         cap_map = {
             "welcome": "greet",
             "new_viewer": "greet",
@@ -683,10 +791,12 @@ class CohostAgent:
             "hype": "hype",
             "chat": "hype",
         }
-        if not caps.get(cap_map.get(kind, "hype"), True):
+        if not is_op and not caps.get(cap_map.get(kind, "hype"), True):
             return
 
-        if kind in {"welcome", "question", "mention", "new_viewer", "returning"}:
+        if is_op:
+            should = True
+        elif kind in {"welcome", "question", "mention", "new_viewer", "returning"}:
             should = True
         elif kind == "hype":
             should = autonomy >= 35
@@ -696,23 +806,29 @@ class CohostAgent:
         if not should:
             return
 
-        fallback = self._fallback(kind, author, message, platform=item.get("platform") or "chat")
-        use_ai = (not demo) and energy != "eco" and kind in {"question", "mention"}
+        fallback = self._fallback(kind, author, message, platform=platform)
+        use_ai = (not demo) and energy != "eco" and (is_op or kind in {"question", "mention"})
         if use_ai:
-            hint = "Answer briefly if you can. If not, pivot to the music. Name them once."
+            if is_op:
+                hint = "Reply to the booth operator in 2-3 short spoken sentences. Be direct."
+            elif dj_mode:
+                hint = "DJ mode: one short spoken sentence. Name them once."
+            else:
+                hint = "Answer briefly if you can. If not, pivot to the music. Name them once."
             line = await self._compose(
                 author,
                 message,
                 fallback=fallback,
                 hint=hint,
-                platform=item.get("platform") or "chat",
+                platform=platform,
+                max_sentences=max_sent,
             )
         else:
-            line = fallback
+            line = clip_sentences(fallback, max_sent)
         mood = "hype" if kind in {"hype", "welcome", "new_viewer", "returning"} else "talk"
         if kind in {"welcome", "new_viewer", "returning"}:
             self.greets += 1
-            self._returning.discard(f"{(item.get('platform') or 'chat').lower()}:{user_key}")
+            self._returning.discard(f"{platform.lower()}:{user_key}")
         self._say(line, target=author, mood=mood)
         self._last_reply_user[user_key] = time.time()
 
@@ -801,19 +917,22 @@ class CohostAgent:
         fallback: str,
         hint: str,
         platform: str = "chat",
+        max_sentences: int | None = None,
     ) -> str:
         now = time.time()
         self._roll_metrics_day()
         cap = self._daily_call_cap()
+        limit = 2 if max_sentences is None else max(1, int(max_sentences))
+        capped_fallback = clip_sentences(fallback, limit)
         if cap is not None and self._calls_today >= cap:
-            return fallback
+            return capped_fallback
         if (
             not self._llm
             or not self._llm.available
             or now < self._ai_backoff_until
             or now - self._last_gemini < 12
         ):
-            return fallback
+            return capped_fallback
         snap = self.get_snapshot()
         track = snap.get("current_track") or {}
         title = self._short_title(track.get("filename") or "nothing loaded")
@@ -842,10 +961,11 @@ class CohostAgent:
         prompt_parts.append(f"Reply to {who} who said: {message}")
         prompt = "\n".join(prompt_parts)
         try:
-            persona = (self._cfg().get("halo") or {}).get("persona") or PERSONA
+            persona = self._persona()
+            tokens = 160 if limit >= 3 else 120
 
             def _call():
-                return self._llm.generate(persona, prompt, max_tokens=120)
+                return self._llm.generate(persona, prompt, max_tokens=tokens)
 
             self._last_gemini = now
             t0 = time.perf_counter()
@@ -856,14 +976,14 @@ class CohostAgent:
             self._latencies_ms.append(elapsed_ms)
             cleaned = check_output(text, settings=self._cfg())
             if cleaned and len(cleaned) > 12:
-                return cleaned
-            return fallback
+                return clip_sentences(cleaned, limit)
+            return capped_fallback
         except Exception as e:
             err = str(e)
             logger.error("Halo LLM reply failed: %s", e)
             if "429" in err or "RESOURCE_EXHAUSTED" in err:
                 self._ai_backoff_until = time.time() + 75
-        return fallback
+        return capped_fallback
 
     def _say(self, text: str, target: Optional[str] = None, mood: str = "talk"):
         if is_killed():

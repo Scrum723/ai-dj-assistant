@@ -124,6 +124,7 @@ def check_input(
     message: Optional[str] = None,
     *,
     settings: Optional[dict] = None,
+    skip_rate: bool = False,
 ) -> tuple[bool, str]:
     """Return (ok, reason). reason is empty when ok."""
     author, text = _extract(author_or_msg, message)
@@ -152,7 +153,7 @@ def check_input(
     if REPEAT_RE.search(text):
         return False, "flood"
 
-    if not _take_token(author):
+    if not skip_rate and not _take_token(author):
         return False, "rate"
 
     return True, ""

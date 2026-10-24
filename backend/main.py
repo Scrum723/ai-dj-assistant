@@ -285,7 +285,8 @@ async def speech_worker():
             continue
         text = item["text"]
         cfg = load_settings()
-        if (cfg.get("halo") or {}).get("dj_mode"):
+        # Old full-mute; DJ mode itself is quiet (selective replies) in cohost
+        if (cfg.get("halo") or {}).get("dj_mode_silent"):
             continue
         audio_url = None
         try:

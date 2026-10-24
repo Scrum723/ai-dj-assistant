@@ -114,7 +114,11 @@ def agent(tmp_memory, fake_llm, spoken, noted):
             "autonomy": 70,
             "halo": {
                 "name": "Halo",
+                "persona_preset": "hype",
+                "persona": "",
                 "dj_mode": False,
+                "dj_mode_silent": False,
+                "operator_handles": ["charles", "charlesclottin"],
                 "capabilities": {
                     "greet": True,
                     "questions": True,

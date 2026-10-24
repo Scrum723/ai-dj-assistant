@@ -17,6 +17,7 @@ VOICE_DIR = APP_DIR / "voice"
 DEFAULTS = {
     "halo": {
         "name": "Halo",
+        "persona_preset": "hype",
         "persona": (
             "You are Halo, the LLM DJ buddy inside DJ Bot Botty "
             "(Charles Clottin / A Geostrophic Flow). Socialize with chat: greet by name, "
@@ -28,6 +29,7 @@ DEFAULTS = {
         "elevenlabs_key": "",
         "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
         "dj_mode": False,
+        "dj_mode_silent": False,
         "listen_mic": False,
         "min_reply_sec": 8,
         "operator_handles": ["charles", "charlesclottin"],
