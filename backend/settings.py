@@ -29,6 +29,7 @@ DEFAULTS = {
         "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
         "dj_mode": False,
         "listen_mic": False,
+        "min_reply_sec": 8,
         "operator_handles": ["charles", "charlesclottin"],
         "capabilities": {
             "greet": True,

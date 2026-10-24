@@ -377,6 +377,13 @@ async def lifespan(app: FastAPI):
             aggregator.configure_adapter("youtube", enabled=enabled, channel=vid)
 
     agent.set_youtube_hook(_on_youtube_change)
+
+    def _publish_halo_reply(author: str, text: str) -> None:
+        if aggregator:
+            aggregator.publish_halo(text, name=author)
+
+    agent.set_publish_halo_hook(_publish_halo_reply)
+    agent.set_presence_hook(presence_payload)
     agent.set_demo(bool(cfg.get("demo")))
     if cfg.get("youtube_id"):
         agent.youtube_id = str(cfg.get("youtube_id") or "").strip() or None
@@ -657,6 +664,19 @@ def incoming_chat(req: ChatIn):
         return {"error": "cohost offline"}
     agent.ingest(req.author, req.message, platform=platform)
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+def halo_metrics(_auth: None = Depends(require_operator)):
+    if not agent:
+        return {
+            "calls_today": 0,
+            "p50_ms": 0,
+            "p95_ms": 0,
+            "est_cost_usd": 0.0,
+            "tokens_est": 0,
+        }
+    return agent.metrics()
 
 
 @app.get("/community/status")

@@ -9,7 +9,7 @@ from collections import OrderedDict, deque
 from typing import Any, Callable, Optional
 
 from community.adapters.base import ChatAdapter
-from community.schema import ChatMessage
+from community.schema import ChatMessage, ChatUser
 from moderation import check_input
 
 logger = logging.getLogger(__name__)
@@ -186,6 +186,26 @@ class Aggregator:
                 logger.exception("room broadcast failed")
 
         return True
+
+    def publish_halo(self, text: str, *, name: str = "Halo") -> bool:
+        """Publish a Halo line into the merged room (platform=halo)."""
+        ts = time.time()
+        handle = (name or "Halo").strip()[:40] or "Halo"
+        msg = ChatMessage(
+            id=f"halo:{handle}:{ts}",
+            platform="halo",
+            channel="booth",
+            user=ChatUser(
+                platform_user_id="halo",
+                handle=handle,
+                display_name=handle,
+                is_owner=True,
+            ),
+            text=(text or "").strip()[:280],
+            kind="chat",
+            ts=ts,
+        )
+        return self.ingest(msg)
 
     def recent(self, limit: int = 50) -> list[dict]:
         with self._lock:

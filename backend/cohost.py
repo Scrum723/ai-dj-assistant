@@ -110,6 +110,52 @@ DEMO_FANS = [
     ("TempoJack", "what's the BPM on this?"),
 ]
 
+# Reply selection priority (lower = sooner). mentions > requests > first-time > questions > rest
+_REPLY_PRIORITY = {
+    "mention": 0,
+    "request": 1,
+    "welcome": 2,
+    "new_viewer": 2,
+    "returning": 3,
+    "question": 3,
+    "hype": 4,
+    "chat": 4,
+}
+
+_PLATFORM_LABEL = {
+    "youtube": "YouTube",
+    "twitch": "Twitch",
+    "kick": "Kick",
+    "tiktok": "TikTok",
+    "x": "X",
+    "facebook": "Facebook",
+    "rumble": "Rumble",
+    "room": "room",
+    "halo": "Halo",
+    "chat": "chat",
+    "demo": "demo",
+    "dashboard": "the booth",
+}
+
+_METRICS_LAT_MAX = 200
+
+
+def _percentile(values: list[float], p: float) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    if len(s) == 1:
+        return float(s[0])
+    k = (len(s) - 1) * (p / 100.0)
+    f = int(k)
+    c = min(f + 1, len(s) - 1)
+    return float(s[f] + (s[c] - s[f]) * (k - f))
+
+
+def _estimate_tokens(*parts: str) -> int:
+    total = sum(len(p or "") for p in parts)
+    return max(1, total // 4)
+
 
 class CohostAgent:
     def __init__(
@@ -153,11 +199,19 @@ class CohostAgent:
         self._last_reply_user: dict[str, float] = {}
         self._returning: set[str] = set()
         self._inbox: asyncio.Queue = asyncio.Queue()
+        self._pending: list[dict] = []
+        self._last_reply_at = 0.0
         self._demo_i = 0
         self._next_demo = 0.0
         self._yt_thread: Optional[threading.Thread] = None
         self._yt_stop = threading.Event()
         self.quiet = False
+        self._get_presence: Optional[Callable[[], dict]] = None
+        self._publish_halo: Optional[Callable[[str, str], None]] = None
+        self._metrics_day = time.strftime("%Y-%m-%d")
+        self._calls_today = 0
+        self._tokens_est = 0
+        self._latencies_ms: deque[float] = deque(maxlen=_METRICS_LAT_MAX)
         if not self._llm.available:
             logger.warning("Halo LLM unavailable — using local lines only.")
 
@@ -213,6 +267,167 @@ class CohostAgent:
 
     def set_youtube_hook(self, hook: Optional[Callable[[Optional[str]], None]]) -> None:
         self._on_youtube_change = hook
+
+    def set_presence_hook(self, hook: Optional[Callable[[], dict]]) -> None:
+        self._get_presence = hook
+
+    def set_publish_halo_hook(self, hook: Optional[Callable[[str, str], None]]) -> None:
+        self._publish_halo = hook
+
+    def _roll_metrics_day(self) -> None:
+        day = time.strftime("%Y-%m-%d")
+        if day != self._metrics_day:
+            self._metrics_day = day
+            self._calls_today = 0
+            self._tokens_est = 0
+
+    def _cost_per_1k(self) -> float:
+        try:
+            return float(os.getenv("HALO_COST_PER_1K") or "0.0001")
+        except ValueError:
+            return 0.0001
+
+    def _daily_call_cap(self) -> Optional[int]:
+        raw = os.getenv("HALO_DAILY_CALL_CAP")
+        if raw is None or str(raw).strip() == "":
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def metrics(self) -> dict[str, Any]:
+        self._roll_metrics_day()
+        lats = list(self._latencies_ms)
+        return {
+            "calls_today": self._calls_today,
+            "p50_ms": int(round(_percentile(lats, 50))),
+            "p95_ms": int(round(_percentile(lats, 95))),
+            "est_cost_usd": round(self._tokens_est / 1000.0 * self._cost_per_1k(), 6),
+            "tokens_est": self._tokens_est,
+        }
+
+    def _min_reply_sec(self) -> float:
+        raw = (self._cfg().get("halo") or {}).get("min_reply_sec")
+        try:
+            return max(0.0, float(8 if raw is None else raw))
+        except (TypeError, ValueError):
+            return 8.0
+
+    def _platform_label(self, platform: str) -> str:
+        p = (platform or "chat").strip().lower() or "chat"
+        return _PLATFORM_LABEL.get(p, p)
+
+    def _platform_phrase(self, platform: str) -> tuple[str, str]:
+        """Return (preposition, label) — 'from Twitch', 'on YouTube'."""
+        p = (platform or "chat").strip().lower() or "chat"
+        label = self._platform_label(p)
+        if p == "youtube":
+            return "on", label
+        if p == "twitch":
+            return "from", label
+        if p == "room":
+            return "in", "the room"
+        if p in {"kick", "tiktok", "rumble", "facebook", "x"}:
+            return "on", label
+        return "from", label
+
+    def _crowd_summary(self) -> str:
+        counts: dict[str, int] = {}
+        total = 0
+        getter = self._get_presence
+        if callable(getter):
+            try:
+                payload = getter() or {}
+                counts = dict(payload.get("counts") or {})
+                total = int(payload.get("total") or sum(counts.values()))
+            except Exception:
+                logger.exception("presence hook failed")
+        if not counts:
+            for c in self.chat:
+                plat = (c.get("platform") or "chat").strip().lower()
+                if plat in {"halo", "demo"}:
+                    continue
+                author = (c.get("author") or "").strip()
+                if not author or author.lower() in IGNORE_USERS:
+                    continue
+                counts[plat] = counts.get(plat, 0) + 1
+            # unique-ish from viewers if chat empty
+            if not counts and self.viewers:
+                counts["room"] = len(self.viewers)
+            total = sum(counts.values())
+        if total <= 0:
+            return ""
+        order = ("youtube", "twitch", "kick", "tiktok", "x", "facebook", "rumble", "room")
+        parts: list[str] = []
+        seen: set[str] = set()
+        for key in order:
+            n = int(counts.get(key) or 0)
+            if n:
+                parts.append(f"{n} {self._platform_label(key)}")
+                seen.add(key)
+        for key, n in counts.items():
+            if key not in seen and int(n or 0) > 0:
+                parts.append(f"{int(n)} {self._platform_label(key)}")
+        if not parts:
+            return f"{total} here"
+        return f"{total} here: {', '.join(parts)}"
+
+    def _reply_priority(self, kind: str) -> int:
+        return int(_REPLY_PRIORITY.get(kind, 4))
+
+    def _select_from_batch(self, batch: list[dict]) -> tuple[list[dict], str]:
+        """Pick what to answer. Returns (items, mode) mode in {single, combined_new}."""
+        scored: list[tuple[int, dict]] = []
+        for item in batch:
+            kind = self._classify(
+                item["author"],
+                item["message"],
+                platform=item.get("platform") or "chat",
+            )
+            item["_kind"] = kind
+            scored.append((self._reply_priority(kind), item))
+        scored.sort(key=lambda x: (x[0], float(x[1].get("ts") or 0)))
+        if not scored:
+            return [], "single"
+        best_pri = scored[0][0]
+        if best_pri == 2:
+            news = [
+                it
+                for pri, it in scored
+                if pri == 2 and it.get("_kind") in {"welcome", "new_viewer"}
+            ]
+            if len(news) >= 2:
+                return news[:5], "combined_new"
+        return [scored[0][1]], "single"
+
+    def _combined_new_line(self, items: list[dict]) -> str:
+        bits: list[str] = []
+        for it in items:
+            author = it["author"]
+            prep, label = self._platform_phrase(it.get("platform") or "chat")
+            bits.append(f"{author} {prep} {label}")
+        if len(bits) == 1:
+            body = bits[0]
+        elif len(bits) == 2:
+            body = f"{bits[0]} and {bits[1]}"
+        else:
+            body = f"{', '.join(bits[:-1])}, and {bits[-1]}"
+        return f"{body} just pulled up — welcome to the booth!"
+
+    def _fulfill_request_silent(self, item: dict) -> None:
+        author = item["author"]
+        message = item["message"]
+        query = self._request_query(message)
+        self.requests_handled += 1
+        try:
+            self.memory.remember_request(item.get("platform") or "chat", author, query)
+        except Exception:
+            logger.exception("remember_request failed")
+        try:
+            self.enqueue_request(query=query, requester=author, via=item.get("platform") or "chat", silent=True)
+        except Exception:
+            logger.exception("silent request enqueue failed")
 
     def _operator_handles(self) -> set[str]:
         raw = (self._cfg().get("halo") or {}).get("operator_handles")
@@ -333,12 +548,23 @@ class CohostAgent:
         distraction = int(env.get("distraction") or 30)
         autonomy = int(cfg.get("autonomy") or self.get_autonomy())
         now = time.time()
-        try:
-            item = self._inbox.get_nowait()
-        except asyncio.QueueEmpty:
-            item = None
-        if item and not self.quiet:
-            await self._handle_chat(item, autonomy, dj_mode=dj_mode, caps=caps, energy=energy)
+
+        while True:
+            try:
+                self._pending.append(self._inbox.get_nowait())
+            except asyncio.QueueEmpty:
+                break
+
+        min_sec = self._min_reply_sec()
+        if self._pending and not self.quiet:
+            due = self._last_reply_at <= 0 or (now - self._last_reply_at) >= min_sec
+            if due:
+                batch = self._pending
+                self._pending = []
+                await self._handle_batch(
+                    batch, autonomy, dj_mode=dj_mode, caps=caps, energy=energy
+                )
+                self._last_reply_at = time.time()
 
         if self.quiet or dj_mode or not caps.get("idle_talk", True) or energy == "eco":
             idle_every = 120.0
@@ -351,6 +577,7 @@ class CohostAgent:
             and caps.get("idle_talk", True)
             and now - self._last_idle >= idle_every
             and self._inbox.empty()
+            and not self._pending
         ):
             self._idle_line(autonomy, caps)
             self._last_idle = now
@@ -364,10 +591,47 @@ class CohostAgent:
                 self.ingest(author, text, platform="demo")
                 self._next_demo = now + gap
 
+    async def _handle_batch(
+        self,
+        batch: list[dict],
+        autonomy: int,
+        dj_mode: bool = False,
+        caps: dict | None = None,
+        energy: str = "balanced",
+    ):
+        if not batch:
+            return
+        caps = caps or {}
+        selected, mode = self._select_from_batch(batch)
+        selected_ids = {id(x) for x in selected}
+        for item in batch:
+            if item.get("_kind") == "request" and id(item) not in selected_ids:
+                if caps.get("requests", True):
+                    self._fulfill_request_silent(item)
+
+        if mode == "combined_new" and selected and not dj_mode:
+            if not caps.get("greet", True):
+                return
+            line = self._combined_new_line(selected)
+            for it in selected:
+                user_key = it["author"].lower()
+                self.greets += 1
+                self._returning.discard(f"{(it.get('platform') or 'chat').lower()}:{user_key}")
+                self._last_reply_user[user_key] = time.time()
+            self._say(line, target=selected[0]["author"], mood="hype")
+            return
+
+        if selected:
+            await self._handle_chat(
+                selected[0], autonomy, dj_mode=dj_mode, caps=caps, energy=energy
+            )
+
     async def _handle_chat(self, item: dict, autonomy: int, dj_mode: bool = False, caps: dict | None = None, energy: str = "balanced"):
         author = item["author"]
         message = item["message"]
-        kind = self._classify(author, message, platform=item.get("platform") or "chat")
+        kind = item.get("_kind") or self._classify(
+            author, message, platform=item.get("platform") or "chat"
+        )
         self.mood = "listening"
         caps = caps or {}
 
@@ -432,7 +696,7 @@ class CohostAgent:
         if not should:
             return
 
-        fallback = self._fallback(kind, author, message)
+        fallback = self._fallback(kind, author, message, platform=item.get("platform") or "chat")
         use_ai = (not demo) and energy != "eco" and kind in {"question", "mention"}
         if use_ai:
             hint = "Answer briefly if you can. If not, pivot to the music. Name them once."
@@ -507,10 +771,13 @@ class CohostAgent:
             return message.split(" ", 1)[1].strip()
         return message
 
-    def _fallback(self, kind: str, author: str, message: str) -> str:
+    def _fallback(self, kind: str, author: str, message: str, platform: str = "chat") -> str:
         if kind == "returning":
             return random.choice(RETURNING_LINES).format(name=author)
         if kind in {"welcome", "new_viewer"}:
+            prep, label = self._platform_phrase(platform)
+            if (platform or "").strip().lower() not in {"", "chat", "demo", "dashboard"}:
+                return f"{author} {prep} {label} just pulled up — welcome to the booth!"
             return random.choice(WELCOME_LINES).format(name=author)
         if kind == "hype":
             return random.choice(HYPE_LINES).format(name=author)
@@ -536,6 +803,10 @@ class CohostAgent:
         platform: str = "chat",
     ) -> str:
         now = time.time()
+        self._roll_metrics_day()
+        cap = self._daily_call_cap()
+        if cap is not None and self._calls_today >= cap:
+            return fallback
         if (
             not self._llm
             or not self._llm.available
@@ -548,19 +819,27 @@ class CohostAgent:
         title = self._short_title(track.get("filename") or "nothing loaded")
         halo_name = self._halo_name()
         recent = "\n".join(
-            f"{c['author']}: {c['message']}"
-            for c in list(self.chat)[-5:]
+            f"[{(c.get('platform') or 'chat')}] {c['author']}: {c['message']}"
+            for c in list(self.chat)[-8:]
             if c.get("author") != halo_name
         )
         memory_line = self._viewer_memory_line(author, platform)
+        crowd = self._crowd_summary()
+        prep, label = self._platform_phrase(platform)
+        who = author
+        if (platform or "").strip().lower() not in {"", "chat", "demo"}:
+            who = f"{author} {prep} {label}"
         prompt_parts = [
             hint,
             f"Now playing: {title}.",
         ]
+        if crowd:
+            prompt_parts.append(f"Crowd: {crowd}.")
         if memory_line:
             prompt_parts.append(memory_line)
-        prompt_parts.append(f"Recent chat:\n{recent}")
-        prompt_parts.append(f"Reply to {author} who said: {message}")
+        if recent:
+            prompt_parts.append(f"Recent chat:\n{recent}")
+        prompt_parts.append(f"Reply to {who} who said: {message}")
         prompt = "\n".join(prompt_parts)
         try:
             persona = (self._cfg().get("halo") or {}).get("persona") or PERSONA
@@ -569,7 +848,12 @@ class CohostAgent:
                 return self._llm.generate(persona, prompt, max_tokens=120)
 
             self._last_gemini = now
+            t0 = time.perf_counter()
             text = await asyncio.to_thread(_call)
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            self._calls_today += 1
+            self._tokens_est += _estimate_tokens(persona, prompt, text or "")
+            self._latencies_ms.append(elapsed_ms)
             cleaned = check_output(text, settings=self._cfg())
             if cleaned and len(cleaned) > 12:
                 return cleaned
@@ -604,7 +888,15 @@ class CohostAgent:
                 "ts": time.time(),
             }
         )
-        self.note_chat({"author": name, "message": text, "platform": "halo", "ts": time.time()})
+        pub = self._publish_halo
+        if callable(pub):
+            try:
+                pub(name, text)
+            except Exception:
+                logger.exception("publish halo to aggregator failed")
+                self.note_chat({"author": name, "message": text, "platform": "halo", "ts": time.time()})
+        else:
+            self.note_chat({"author": name, "message": text, "platform": "halo", "ts": time.time()})
 
     def _short_title(self, filename: str) -> str:
         name = os.path.splitext(filename or "")[0]
