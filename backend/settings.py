@@ -93,6 +93,11 @@ DEFAULTS = {
     "demo": False,
     "youtube_id": "",
     "autonomy": 70,
+    "dj": {
+        "automation": False,
+        "manual_takeover": False,
+        "takeover_minutes": 5,
+    },
     "shows": [],  # [{start_iso, title}, ...]
     "moderation": {
         "blocklist": [],

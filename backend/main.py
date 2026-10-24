@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 dj = DJController(port_name="AI_DJ_Virtual_Port")
 DB_PATH = os.path.join(os.path.dirname(__file__), "library.db")
 KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+EQ_BANDS = frozenset({"low", "mid", "hi"})
 
 agent: Optional[CohostAgent] = None
 aggregator: Optional[Aggregator] = None
@@ -94,9 +95,16 @@ state: dict[str, Any] = {
     "queue": [],
     "autonomy": 80,
     "crossfader": 0.0,
+    "active_deck": 1,
+    "deck_eq": {
+        1: {"low": 0.5, "mid": 0.5, "hi": 0.5},
+        2: {"low": 0.5, "mid": 0.5, "hi": 0.5},
+    },
+    "deck_filter": {1: 0.5, 2: 0.5},
     "midi_connected": dj.connected,
     "midi_port": dj.port_name,
     "midi_error": dj.error,
+    "dj_backend": dj.backend,
     "speak_id": 0,
     "speak_text": "",
     "speak_target": None,
@@ -176,13 +184,27 @@ def room_urls() -> dict:
 def snapshot() -> dict:
     current = state["current_track"]
     key = current.get("key") if current else None
+    cfg = public_settings()
+    dj_cfg = (cfg.get("dj") or {})
+    sim_snap = None
+    if getattr(dj, "simulator", None) is not None:
+        try:
+            sim_snap = dj.simulator.snapshot()
+        except Exception:
+            sim_snap = None
     return {
         **state,
         "track_count": len(all_tracks()),
         "compatible_keys": compatible_keys(key),
         "midi_map": MIDI_MAP,
+        "midi_connected": dj.connected,
+        "midi_error": dj.error,
+        "dj_backend": dj.backend,
+        "manual_takeover": bool(dj_cfg.get("manual_takeover", False)),
+        "automation": bool(dj_cfg.get("automation", False)),
+        "sim": sim_snap,
         "agent": agent.status() if agent else {"running": False},
-        "settings": public_settings(),
+        "settings": cfg,
         "room_urls": room_urls(),
     }
 
@@ -632,10 +654,12 @@ app.include_router(sentinel_router)
 
 class CrossfadeRequest(BaseModel):
     value: float = Field(ge=0.0, le=1.0)
+    source: str = "manual"
 
 
 class DeckRequest(BaseModel):
-    deck: int = 1
+    deck: int = Field(default=1, ge=1, le=2)
+    source: str = "manual"
 
 
 class AutonomyRequest(BaseModel):
@@ -657,6 +681,30 @@ class SpeakRequest(BaseModel):
 
 class LoadTrackRequest(BaseModel):
     track_id: int
+    deck: int = Field(default=1, ge=1, le=2)
+    source: str = "manual"
+
+
+class EqRequest(BaseModel):
+    deck: int = Field(default=1, ge=1, le=2)
+    band: str
+    value: float = Field(ge=0.0, le=1.0)
+    source: str = "manual"
+
+
+class FilterRequest(BaseModel):
+    deck: int = Field(default=1, ge=1, le=2)
+    value: float = Field(ge=0.0, le=1.0)
+    source: str = "manual"
+
+
+class SyncRequest(BaseModel):
+    deck: int = Field(default=1, ge=1, le=2)
+    source: str = "manual"
+
+
+class TakeoverRequest(BaseModel):
+    enabled: bool = True
 
 
 class ChatIn(BaseModel):
@@ -785,11 +833,25 @@ def search_song(query: str):
     return {"results": search_tracks(query)}
 
 
+def _midi_result_or_killed(result: dict) -> Optional[dict]:
+    if not result.get("ok"):
+        reason = result.get("reason")
+        if reason == "killed":
+            return {"status": "killed"}
+        return {"status": "refused", "reason": reason, "midi": result}
+    return None
+
+
 @app.post("/action/play")
 def play_deck(req: DeckRequest, _auth: None = Depends(require_operator)):
     if is_killed():
         return {"status": "killed"}
-    dj.deck_play_pause(deck=req.deck)
+    result = dj.deck_play_pause(deck=req.deck, source=req.source)
+    refused = _midi_result_or_killed(result)
+    if refused and refused.get("status") == "killed":
+        return refused
+    if refused and result.get("reason") in ("automation_off", "manual_takeover"):
+        return refused
     if not state["current_track"]:
         queue = state["queue"]
         tracks = all_tracks()
@@ -799,9 +861,15 @@ def play_deck(req: DeckRequest, _auth: None = Depends(require_operator)):
         elif tracks:
             state["current_track"] = tracks[0]
     state["playing"] = not state["playing"]
+    state["active_deck"] = req.deck
     push_log(f"{'Playing' if state['playing'] else 'Paused'} deck {req.deck}")
     publish_state()
-    return {"status": f"Toggled deck {req.deck}", "playing": state["playing"], "midi_connected": dj.connected}
+    return {
+        "status": f"Toggled deck {req.deck}",
+        "playing": state["playing"],
+        "midi_connected": dj.connected,
+        "midi": result,
+    }
 
 
 @app.post("/action/skip")
@@ -812,11 +880,15 @@ def skip_track(_auth: None = Depends(require_operator)):
         item = state["queue"].pop(0)
         state["current_track"] = item.get("track") or item
         state["playing"] = True
-        dj.deck_play_pause(deck=1)
+        result = dj.deck_play_pause(deck=1, source="manual")
+        if getattr(dj, "simulator", None) is not None:
+            dj.simulator.load_track(1, state["current_track"])
         push_log(f"Skipped to {state['current_track'].get('filename', 'next track')}")
         if agent:
             title = state["current_track"].get("filename", "the next track")
             queued_speak(f"Skipping ahead — {title} coming up.", mood="hype")
+        publish_state()
+        return {"status": "skipped", "current_track": state["current_track"], "midi": result}
     publish_state()
     return {"status": "skipped", "current_track": state["current_track"]}
 
@@ -827,21 +899,116 @@ def load_track(req: LoadTrackRequest, _auth: None = Depends(require_operator)):
         return {"status": "killed"}
     tracks = [t for t in all_tracks() if t["id"] == req.track_id]
     if not tracks:
-        return {"error": "Track not found"}
-    state["current_track"] = tracks[0]
-    push_log(f"Loaded {tracks[0]['filename']}")
+        raise HTTPException(status_code=404, detail="Track not found")
+    track = tracks[0]
+    # browse + load to deck (MIDI), then update booth state
+    dj.browse(deck=req.deck, direction="down", source=req.source)
+    result = dj.load(deck=req.deck, source=req.source)
+    refused = _midi_result_or_killed(result)
+    if refused and refused.get("status") == "killed":
+        return refused
+    if refused and result.get("reason") in ("automation_off", "manual_takeover"):
+        return refused
+    state["current_track"] = track
+    state["active_deck"] = req.deck
+    if getattr(dj, "simulator", None) is not None:
+        dj.simulator.load_track(req.deck, track)
+    push_log(f"Loaded {track['filename']} → deck {req.deck}")
     publish_state()
-    return {"status": "loaded", "current_track": tracks[0]}
+    return {"status": "loaded", "current_track": track, "deck": req.deck, "midi": result}
 
 
 @app.post("/action/crossfade")
 def crossfade(req: CrossfadeRequest, _auth: None = Depends(require_operator)):
     if is_killed():
         return {"status": "killed"}
-    dj.crossfader(req.value)
+    result = dj.crossfader(req.value, source=req.source)
+    refused = _midi_result_or_killed(result)
+    if refused and refused.get("status") == "killed":
+        return refused
+    if refused and result.get("reason") in ("automation_off", "manual_takeover"):
+        return refused
     state["crossfader"] = req.value
     publish_state()
-    return {"status": f"Crossfader moved to {req.value}"}
+    return {"status": f"Crossfader moved to {req.value}", "midi": result}
+
+
+@app.post("/action/eq")
+def action_eq(req: EqRequest, _auth: None = Depends(require_operator)):
+    if is_killed():
+        return {"status": "killed"}
+    band = (req.band or "").lower().strip()
+    if band not in EQ_BANDS:
+        raise HTTPException(status_code=422, detail="band must be low, mid, or hi")
+    result = dj.set_eq(deck=req.deck, band=band, value=req.value, source=req.source)
+    refused = _midi_result_or_killed(result)
+    if refused and refused.get("status") == "killed":
+        return refused
+    if refused and result.get("reason") in ("automation_off", "manual_takeover", "bad_band", "bad_deck"):
+        if result.get("reason") in ("bad_band", "bad_deck"):
+            raise HTTPException(status_code=422, detail=result.get("reason"))
+        return refused
+    state["deck_eq"][req.deck][band] = req.value
+    publish_state()
+    return {"status": "ok", "deck": req.deck, "band": band, "value": req.value, "midi": result}
+
+
+@app.post("/action/filter")
+def action_filter(req: FilterRequest, _auth: None = Depends(require_operator)):
+    if is_killed():
+        return {"status": "killed"}
+    result = dj.set_filter(deck=req.deck, value=req.value, source=req.source)
+    refused = _midi_result_or_killed(result)
+    if refused and refused.get("status") == "killed":
+        return refused
+    if refused and result.get("reason") in ("automation_off", "manual_takeover"):
+        return refused
+    state["deck_filter"][req.deck] = req.value
+    publish_state()
+    return {"status": "ok", "deck": req.deck, "value": req.value, "midi": result}
+
+
+@app.post("/action/sync")
+def action_sync(req: SyncRequest, _auth: None = Depends(require_operator)):
+    if is_killed():
+        return {"status": "killed"}
+    result = dj.sync(deck=req.deck, source=req.source)
+    refused = _midi_result_or_killed(result)
+    if refused and refused.get("status") == "killed":
+        return refused
+    if refused and result.get("reason") in ("automation_off", "manual_takeover"):
+        return refused
+    push_log(f"Sync deck {req.deck}")
+    publish_state()
+    return {"status": "ok", "deck": req.deck, "midi": result}
+
+
+@app.post("/action/panic")
+def action_panic(_auth: None = Depends(require_operator)):
+    if is_killed():
+        return {"status": "killed"}
+    result = dj.panic(source="manual")
+    if not result.get("ok") and result.get("reason") == "killed":
+        return {"status": "killed"}
+    state["deck_eq"] = {
+        1: {"low": 0.5, "mid": 0.5, "hi": 0.5},
+        2: {"low": 0.5, "mid": 0.5, "hi": 0.5},
+    }
+    state["deck_filter"] = {1: 0.5, 2: 0.5}
+    state["crossfader"] = float(result.get("crossfader", 0.5))
+    push_log("PANIC — EQ/filter reset, fader centred on playing deck")
+    publish_state()
+    return {"status": "ok", "midi": result}
+
+
+@app.post("/action/takeover")
+def action_takeover(req: TakeoverRequest, _auth: None = Depends(require_operator)):
+    if is_killed():
+        return {"status": "killed"}
+    save_settings({"dj": {"manual_takeover": bool(req.enabled)}})
+    push_log(f"Manual takeover {'ON' if req.enabled else 'OFF'}")
+    publish_state()
+    return {"status": "ok", "manual_takeover": bool(req.enabled)}
 
 
 @app.post("/action/autonomy")
