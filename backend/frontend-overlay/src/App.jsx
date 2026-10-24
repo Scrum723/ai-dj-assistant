@@ -134,6 +134,7 @@ export default function App() {
         <div style={{ overflow: 'hidden', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 8 }}>
           {chat.slice(-10).map((line, i) => (
             <div key={`${line.ts}-${i}`} style={{ fontSize: 15, lineHeight: 1.35 }}>
+              <BadgeText platform={line.platform} />
               <span style={{ color: line.author === haloName ? '#c4b5fd' : '#6ee7b7', fontWeight: 700 }}>
                 {line.author}
               </span>
@@ -239,5 +240,34 @@ function Chip({ children, color }) {
     }}>
       {children}
     </span>
+  );
+}
+
+const BADGE_LABEL = {
+  youtube: 'YT',
+  twitch: 'TW',
+  kick: 'KK',
+  tiktok: 'TT',
+  x: 'X',
+  facebook: 'FB',
+  rumble: 'RB',
+  room: 'ROOM',
+  halo: 'HALO',
+};
+
+function BadgeText({ platform }) {
+  if (!platform) return null;
+  const label = BADGE_LABEL[platform] || String(platform).slice(0, 3).toUpperCase();
+  return (
+    <span style={{
+      marginRight: 6,
+      padding: '1px 5px',
+      borderRadius: 4,
+      fontSize: 10,
+      fontWeight: 800,
+      letterSpacing: 0.5,
+      background: 'rgba(255,255,255,0.18)',
+      color: '#e5e7eb',
+    }}>{label}</span>
   );
 }

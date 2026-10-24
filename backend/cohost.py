@@ -201,11 +201,18 @@ class CohostAgent:
         self.demo = bool(enabled)
 
     def set_youtube(self, video_id: Optional[str]):
+        """Update YouTube video id; community YouTube adapter owns the listener."""
         self.youtube_id = (video_id or "").strip() or None
         self._yt_stop.set()
-        if self.youtube_id:
-            self._yt_stop = threading.Event()
-            self._start_youtube()
+        on_yt = getattr(self, "_on_youtube_change", None)
+        if callable(on_yt):
+            try:
+                on_yt(self.youtube_id)
+            except Exception:
+                logger.exception("youtube adapter update failed")
+
+    def set_youtube_hook(self, hook: Optional[Callable[[Optional[str]], None]]) -> None:
+        self._on_youtube_change = hook
 
     def _operator_handles(self) -> set[str]:
         raw = (self._cfg().get("halo") or {}).get("operator_handles")
@@ -243,7 +250,14 @@ class CohostAgent:
             return True
         return False
 
-    def ingest(self, author: str, message: str, platform: str = "chat"):
+    def ingest(
+        self,
+        author: str,
+        message: str,
+        platform: str = "chat",
+        *,
+        from_aggregator: bool = False,
+    ):
         author = (author or "Fan").strip()[:40]
         message = (message or "").strip()[:280]
         if not message:
@@ -254,10 +268,11 @@ class CohostAgent:
         if self._handle_operator_command(author, message, platform):
             return
 
-        ok, reason = check_input(author, message, settings=self._cfg())
-        if not ok:
-            logger.info("moderation drop author=%s reason=%s", author, reason)
-            return
+        if not from_aggregator:
+            ok, reason = check_input(author, message, settings=self._cfg())
+            if not ok:
+                logger.info("moderation drop author=%s reason=%s", author, reason)
+                return
 
         mem_platform = (platform or "chat").strip().lower() or "chat"
         try:
@@ -277,7 +292,8 @@ class CohostAgent:
             self.viewers[author] = time.time()
         if platform != "demo":
             self.last_real_chat = time.time()
-        self.note_chat(item)
+        if not from_aggregator:
+            self.note_chat(item)
         try:
             self._inbox.put_nowait(item)
         except asyncio.QueueFull:
@@ -285,8 +301,7 @@ class CohostAgent:
 
     async def run(self):
         logger.info("Halo co-host loop starting (demo=%s).", self.demo)
-        if self.youtube_id:
-            self._start_youtube()
+        # YouTube chat is owned by community.adapters.youtube (Aggregator).
         await asyncio.sleep(1.2)
         if not self._intro_done:
             self._intro_done = True
@@ -597,24 +612,5 @@ class CohostAgent:
         return name.strip() or filename
 
     def _start_youtube(self):
-        if not self.youtube_id:
-            return
-
-        def loop():
-            try:
-                import pytchat
-            except Exception as e:
-                logger.error("pytchat missing: %s", e)
-                return
-            logger.info("Halo listening to YouTube live chat %s", self.youtube_id)
-            try:
-                chat = pytchat.create(video_id=self.youtube_id)
-                while self.running and not self._yt_stop.is_set() and chat.is_alive():
-                    for c in chat.get().sync_items():
-                        self.ingest(c.author.name, c.message, platform="youtube")
-                    time.sleep(1)
-            except Exception:
-                logger.exception("YouTube listener died")
-
-        self._yt_thread = threading.Thread(target=loop, daemon=True)
-        self._yt_thread.start()
+        """Deprecated — pytchat loop lives in community.adapters.youtube."""
+        logger.debug("_start_youtube no-op; use Aggregator YouTube adapter")

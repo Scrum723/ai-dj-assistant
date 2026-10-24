@@ -15,6 +15,10 @@ from pydantic import BaseModel, Field
 from auth import require_operator
 from auth import router as auth_router
 from cohost import CohostAgent
+from community.aggregator import Aggregator
+from community.adapters.twitch import TwitchAdapter
+from community.adapters.youtube import YouTubeAdapter
+from community.schema import ChatMessage
 from dj_controller import DJController, MIDI_MAP
 from sentinel import is_killed
 from sentinel import router as sentinel_router
@@ -31,19 +35,23 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "library.db")
 KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 
 agent: Optional[CohostAgent] = None
+aggregator: Optional[Aggregator] = None
 speech_queue: asyncio.Queue
 agent_task: Optional[asyncio.Task] = None
 speech_task: Optional[asyncio.Task] = None
+_main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
 class Hub:
-    def __init__(self):
+    def __init__(self, *, send_state_on_connect: bool = True):
         self.clients: list[WebSocket] = []
+        self.send_state_on_connect = send_state_on_connect
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
         self.clients.append(ws)
-        await ws.send_json({"type": "state", "payload": snapshot()})
+        if self.send_state_on_connect:
+            await ws.send_json({"type": "state", "payload": snapshot()})
 
     def disconnect(self, ws: WebSocket):
         if ws in self.clients:
@@ -61,6 +69,7 @@ class Hub:
 
 
 hub = Hub()
+room_hub = Hub(send_state_on_connect=False)
 
 state: dict[str, Any] = {
     "playing": False,
@@ -164,12 +173,28 @@ def push_log(message: str):
     state["log"] = ([{"t": message}] + state["log"])[:40]
 
 
-def broadcast(message: dict):
+def _schedule(coro) -> None:
+    """Schedule on the app loop from request handlers or adapter threads."""
+    loop = _main_loop
+    if loop is None or not loop.is_running():
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(coro)
+            return
+        except RuntimeError:
+            return
     try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(hub.broadcast(message))
-    except RuntimeError:
+        asyncio.run_coroutine_threadsafe(coro, loop)
+    except Exception:
         pass
+
+
+def broadcast(message: dict):
+    _schedule(hub.broadcast(message))
+
+
+def room_broadcast(message: dict):
+    _schedule(room_hub.broadcast(message))
 
 
 def publish_state():
@@ -270,7 +295,8 @@ async def speech_worker():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, speech_queue, agent_task, speech_task
+    global agent, aggregator, speech_queue, agent_task, speech_task, _main_loop
+    _main_loop = asyncio.get_running_loop()
     speech_queue = asyncio.Queue(maxsize=12)
     speech_task = asyncio.create_task(speech_worker())
     cfg = load_settings()
@@ -284,18 +310,45 @@ async def lifespan(app: FastAPI):
         get_autonomy=lambda: int(load_settings().get("autonomy") or 70),
         get_settings=load_settings,
     )
+    aggregator = Aggregator(
+        cohost_ingest=agent.ingest,
+        note_chat=note_chat,
+        room_broadcast=room_broadcast,
+        get_settings=load_settings,
+    )
+    yt_channel = ""
+    community = cfg.get("community") or {}
+    adapters_cfg = community.get("adapters") or {}
+    yt_cfg = adapters_cfg.get("youtube") or {}
+    tw_cfg = adapters_cfg.get("twitch") or {}
+    yt_channel = str(yt_cfg.get("channel") or cfg.get("youtube_id") or "").strip()
+    aggregator.register(YouTubeAdapter(channel=yt_channel))
+    aggregator.register(TwitchAdapter(channel=str(tw_cfg.get("channel") or "")))
+
+    def _on_youtube_change(video_id: Optional[str]) -> None:
+        vid = (video_id or "").strip()
+        save_settings({"youtube_id": vid or "", "community": {"adapters": {"youtube": {"channel": vid}}}})
+        if aggregator:
+            # Preserve enabled flag from settings; only update channel.
+            enabled = bool(((load_settings().get("community") or {}).get("adapters") or {}).get("youtube", {}).get("enabled"))
+            aggregator.configure_adapter("youtube", enabled=enabled, channel=vid)
+
+    agent.set_youtube_hook(_on_youtube_change)
     agent.set_demo(bool(cfg.get("demo")))
     if cfg.get("youtube_id"):
-        agent.set_youtube(cfg.get("youtube_id"))
+        agent.youtube_id = str(cfg.get("youtube_id") or "").strip() or None
+    aggregator.start()  # adapters disabled by default in settings
     agent_task = asyncio.create_task(agent.run())
     trainer_stop = asyncio.Event()
     trainer_task = asyncio.create_task(idle_trainer(snapshot, trainer_stop))
     tracks = all_tracks()
     if tracks and not state["current_track"]:
         state["current_track"] = tracks[0]
-    logger.info("DJ Bot Botty online. Halo LLM buddy started.")
+    logger.info("DJ Bot Botty online. Halo LLM buddy started. Community aggregator ready.")
     yield
     trainer_stop.set()
+    if aggregator:
+        aggregator.stop()
     if agent:
         agent.stop()
     for task in (agent_task, speech_task, trainer_task):
@@ -543,10 +596,30 @@ def speak(req: SpeakRequest):
 
 @app.post("/chat")
 def incoming_chat(req: ChatIn):
+    platform = (req.platform or "room").strip().lower() or "room"
+    if platform in ("chat", "dashboard", "terminal", "web"):
+        # Treat generic web/dashboard as room for the unified stream.
+        if platform in ("chat", "web"):
+            platform = "room"
+    msg = ChatMessage.make_room(author=req.author, text=req.message)
+    if platform != "room":
+        msg.platform = platform
+        msg.id = f"{platform}:{msg.user.handle}:{msg.ts}"
+        msg.channel = platform
+    if aggregator:
+        accepted = aggregator.ingest(msg)
+        return {"status": "ok" if accepted else "dropped"}
     if not agent:
         return {"error": "cohost offline"}
-    agent.ingest(req.author, req.message, platform=req.platform)
+    agent.ingest(req.author, req.message, platform=platform)
     return {"status": "ok"}
+
+
+@app.get("/community/status")
+def community_status():
+    if not aggregator:
+        return {"started": False, "adapters": {}}
+    return aggregator.status()
 
 
 @app.post("/agent/demo")
@@ -576,6 +649,21 @@ async def websocket_endpoint(ws: WebSocket):
             await ws.receive_text()
     except WebSocketDisconnect:
         hub.disconnect(ws)
+
+
+@app.websocket("/ws/room")
+async def room_websocket(ws: WebSocket):
+    await room_hub.connect(ws)
+    if aggregator:
+        try:
+            await ws.send_json({"type": "history", "payload": aggregator.recent(50)})
+        except Exception:
+            pass
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        room_hub.disconnect(ws)
 
 
 if os.path.isdir(DASH_DIST):

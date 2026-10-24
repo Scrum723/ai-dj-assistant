@@ -7,7 +7,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 
 - [x] A1 — Halo foundation: tests, LLM provider, per-viewer memory — pytest harness, Gemini/xAI via HALO_PROVIDER, SQLite viewer memory injected into prompts
 - [x] A2 — Moderation, safety and access control — input/output filters, rate limits, kill/resume, OPERATOR_KEY auth, operator chat commands
-- [ ] B1 — Aggregator core + unified room v1
+- [x] B1 — Aggregator core + unified room v1 — ChatMessage schema, YouTube/Twitch adapters, Aggregator dedupe+moderation fan-out, /ws/room, Room+overlay badges; adapters disabled by default
 - [ ] B2 — Room history, presence and live-room UX
 - [ ] A3 — Halo speaks to the merged room, with cost and latency controls
 - [ ] A4 — Persona, voice and DJ mode
@@ -33,4 +33,5 @@ _(none yet)_
 
 ## Notes / deviations
 
-_(none yet)_
+- B1 Twitch docs (2026-10-24): official IRC requires oauth PASS/NICK; non-SSL WS removed. Adapter still uses justinfan anonymous read-only over `wss://irc-ws.chat.twitch.tv:443` per plan (community practice; EventSub preferred long-term).
+- B1 YouTube: pytchat loop moved to adapter; cohost.set_youtube updates adapter channel via hook. Official liveChatMessages left as TODO.

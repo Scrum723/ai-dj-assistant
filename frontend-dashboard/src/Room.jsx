@@ -1,9 +1,37 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api.js';
 import StreamLinks from './StreamLinks.jsx';
 
 function nickKey() {
   return 'halodj.room.nick';
+}
+
+function roomWsUrl() {
+  const host = import.meta.env.DEV ? '127.0.0.1:8000' : window.location.host;
+  const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+  return `${proto}://${host}/ws/room`;
+}
+
+const BADGE = {
+  youtube: { label: 'YT', color: '#ef4444' },
+  twitch: { label: 'TW', color: '#a855f7' },
+  kick: { label: 'KK', color: '#22c55e' },
+  tiktok: { label: 'TT', color: '#ec4899' },
+  x: { label: 'X', color: '#9ca3af' },
+  facebook: { label: 'FB', color: '#3b82f6' },
+  rumble: { label: 'RB', color: '#f59e0b' },
+  room: { label: 'ROOM', color: '#10b981' },
+  halo: { label: 'HALO', color: '#c4b5fd' },
+};
+
+function PlatformBadge({ platform }) {
+  const b = BADGE[platform] || { label: (platform || '?').slice(0, 3).toUpperCase(), color: '#6b7280' };
+  return (
+    <span style={{
+      display: 'inline-block', marginRight: 8, padding: '2px 6px', borderRadius: 4,
+      fontSize: 10, fontWeight: 800, letterSpacing: 0.6, background: b.color, color: '#0b0b0b',
+    }}>{b.label}</span>
+  );
 }
 
 export default function Room({ state, refresh }) {
@@ -13,13 +41,63 @@ export default function Room({ state, refresh }) {
   const [joined, setJoined] = useState(!!localStorage.getItem(nickKey()));
   const [text, setText] = useState('');
   const [mode, setMode] = useState('chat');
+  const [liveChat, setLiveChat] = useState([]);
+  const seenIds = useRef(new Set());
 
   useEffect(() => {
     if (joined && nick) localStorage.setItem(nickKey(), nick);
   }, [joined, nick]);
 
+  useEffect(() => {
+    let ws;
+    let closed = false;
+    const connect = () => {
+      if (closed) return;
+      ws = new WebSocket(roomWsUrl());
+      ws.onmessage = (event) => {
+        let msg;
+        try {
+          msg = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (msg.type === 'history' && Array.isArray(msg.payload)) {
+          const next = [];
+          for (const item of msg.payload) {
+            if (item?.id && seenIds.current.has(item.id)) continue;
+            if (item?.id) seenIds.current.add(item.id);
+            next.push(item);
+          }
+          setLiveChat(next);
+          return;
+        }
+        if (msg.type === 'chat' && msg.payload) {
+          const item = msg.payload;
+          if (item.id && seenIds.current.has(item.id)) return;
+          if (item.id) seenIds.current.add(item.id);
+          setLiveChat((prev) => [...prev, item].slice(-200));
+        }
+      };
+      ws.onclose = () => {
+        if (!closed) setTimeout(connect, 2000);
+      };
+    };
+    connect();
+    return () => {
+      closed = true;
+      if (ws) ws.close();
+    };
+  }, []);
+
   const viewers = agent.viewers || [];
-  const chat = agent.chat || [];
+  const fallbackChat = agent.chat || [];
+  const chat = liveChat.length ? liveChat : fallbackChat.map((line) => ({
+    id: `${line.platform || 'room'}:${line.ts}:${line.author}`,
+    platform: line.platform || 'room',
+    user: { display_name: line.author, handle: line.author },
+    text: line.message,
+    ts: line.ts,
+  }));
   const track = state?.current_track;
   const haloName = agent.name || 'Halo';
   const room = settings.room || {};
@@ -83,12 +161,20 @@ export default function Room({ state, refresh }) {
       </aside>
       <section style={{ ...card, display: 'flex', flexDirection: 'column' }}>
         <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 10, maxHeight: 420 }}>
-          {chat.map((line, i) => (
-            <div key={`${line.ts}-${i}`} style={{ padding: 10, borderRadius: 8, background: line.author === haloName ? '#3b0764' : '#1f2937' }}>
-              <strong style={{ color: line.author === haloName ? '#e9d5ff' : '#6ee7b7' }}>{line.author}</strong>
-              <div>{line.message}</div>
-            </div>
-          ))}
+          {chat.map((line, i) => {
+            const author = line.user?.display_name || line.user?.handle || line.author || 'Fan';
+            const body = line.text ?? line.message ?? '';
+            const platform = line.platform || 'room';
+            return (
+              <div key={line.id || `${line.ts}-${i}`} style={{ padding: 10, borderRadius: 8, background: author === haloName || platform === 'halo' ? '#3b0764' : '#1f2937' }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 4 }}>
+                  <PlatformBadge platform={platform} />
+                  <strong style={{ color: author === haloName || platform === 'halo' ? '#e9d5ff' : '#6ee7b7' }}>{author}</strong>
+                </div>
+                <div>{body}</div>
+              </div>
+            );
+          })}
         </div>
         <div style={{ display: 'flex', gap: 8, margin: '16px 0 10px' }}>
           {room.allow_chat !== false && <ModeChip active={mode === 'chat'} onClick={() => setMode('chat')}>Chat</ModeChip>}

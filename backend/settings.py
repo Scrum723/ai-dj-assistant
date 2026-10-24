@@ -68,6 +68,12 @@ DEFAULTS = {
         "tiktok": "https://www.tiktok.com/@charlesclottin/live",
         "rumble": "https://rumble.com/c/charlesclottin",
     },
+    "community": {
+        "adapters": {
+            "youtube": {"enabled": False, "channel": ""},
+            "twitch": {"enabled": False, "channel": ""},
+        },
+    },
 }
 
 
