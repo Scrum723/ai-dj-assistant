@@ -149,10 +149,18 @@ function DJControls({ state, tracks, refresh }) {
   const queue = state?.queue || [];
   const keys = state?.compatible_keys || [];
   const [uiDeck, setUiDeck] = useState(1);
+  const [nextPicks, setNextPicks] = useState(() => state?.next_suggestions || []);
+  const [djPlan, setDjPlan] = useState(() => state?.dj_plan || 'build');
   const activeDeck = uiDeck || state?.active_deck || 1;
+  const otherDeck = activeDeck === 1 ? 2 : 1;
   const takeover = !!state?.manual_takeover;
   const eq = (state?.deck_eq && (state.deck_eq[activeDeck] || state.deck_eq[String(activeDeck)])) || { low: 0.5, mid: 0.5, hi: 0.5 };
   const filterVal = (state?.deck_filter && (state.deck_filter[activeDeck] ?? state.deck_filter[String(activeDeck)])) ?? 0.5;
+
+  useEffect(() => {
+    if (Array.isArray(state?.next_suggestions)) setNextPicks(state.next_suggestions);
+    if (state?.dj_plan) setDjPlan(state.dj_plan);
+  }, [state?.next_suggestions, state?.dj_plan]);
 
   const play = async (deck = activeDeck) => {
     await api('/action/play', { method: 'POST', body: JSON.stringify({ deck }) });
@@ -165,6 +173,20 @@ function DJControls({ state, tracks, refresh }) {
   const load = async (id) => {
     await api('/action/load', { method: 'POST', body: JSON.stringify({ track_id: id, deck: activeDeck }) });
     refresh();
+  };
+  const loadOtherDeck = async (id) => {
+    await api('/action/load', { method: 'POST', body: JSON.stringify({ track_id: id, deck: otherDeck }) });
+    refresh();
+  };
+  const refreshNext = async (plan = djPlan) => {
+    try {
+      const res = await api(`/dj/next?plan=${encodeURIComponent(plan)}&k=3`);
+      setNextPicks(res.picks || []);
+      if (res.plan) setDjPlan(res.plan);
+      refresh();
+    } catch (_) {
+      /* operator auth / offline */
+    }
   };
   const setAutonomy = async (value) => {
     await api('/action/autonomy', { method: 'POST', body: JSON.stringify({ value: Number(value) }) });
@@ -273,6 +295,64 @@ function DJControls({ state, tracks, refresh }) {
               ? <>The current track is in <strong>{key}</strong>. Smooth mixes usually stay in {keys.join(', ') || key}.</>
               : 'Load a track to get a harmonic mix suggestion from the analyzed library.'}
           </p>
+        </div>
+
+        <div style={{ ...cardStyle, borderLeft: '4px solid #22c55e' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <h2 style={{ ...headerStyle, margin: 0 }}>Next track (top 3)</h2>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {['warmup', 'build', 'peak', 'cooldown'].map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => refreshNext(p)}
+                  style={navBtnStyle(djPlan === p, '#16a34a')}
+                >
+                  {p}
+                </button>
+              ))}
+              <button type="button" onClick={() => refreshNext(djPlan)} style={navBtnStyle(false, '#374151')}>
+                Refresh
+              </button>
+            </div>
+          </div>
+          <p style={{ color: '#9ca3af', fontSize: 13, marginTop: 10 }}>
+            Plan <strong>{djPlan}</strong>. Load suggestion to the other deck (Deck {otherDeck === 1 ? 'A' : 'B'}).
+          </p>
+          <div style={{ marginTop: 16 }}>
+            {nextPicks.length === 0 && (
+              <p style={{ color: '#9ca3af' }}>No suggestions yet. Analyze a library and hit Refresh.</p>
+            )}
+            {nextPicks.map((pick, idx) => (
+              <div
+                key={pick.id ?? idx}
+                style={{
+                  padding: 12, marginBottom: 8, backgroundColor: '#1f2937',
+                  border: '1px solid #374151', borderRadius: 8,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                  <div>
+                    <strong>#{idx + 1} {pick.filename}</strong>
+                    <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>
+                      {pick.bpm != null ? `${Number(pick.bpm).toFixed(1)} BPM` : '-- BPM'}
+                      {' · '}Key {pick.key || '--'}
+                      {pick.camelot ? ` · ${pick.camelot}` : ''}
+                      {pick.energy != null ? ` · E ${Number(pick.energy).toFixed(2)}` : ''}
+                    </div>
+                    <div style={{ fontSize: 13, color: '#d1d5db', marginTop: 6 }}>{pick.reason}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => loadOtherDeck(pick.id)}
+                    style={navBtnStyle(false, '#2563eb')}
+                  >
+                    Load to other deck
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div style={cardStyle}>

@@ -33,6 +33,8 @@ from community.relay import CommunityRelay
 from community.schema import ChatMessage, ChatUser
 from community.store import CommunityStore, DEFAULT_RETENTION_DAYS
 from dj_controller import DJController, MIDI_MAP
+from selector import pick as selector_pick
+from selector import plan_names as selector_plan_names
 from sentinel import is_killed
 from sentinel import router as sentinel_router
 from settings import load as load_settings
@@ -93,6 +95,9 @@ state: dict[str, Any] = {
     "playing": False,
     "current_track": None,
     "queue": [],
+    "recent_track_ids": [],
+    "next_suggestions": [],
+    "dj_plan": "build",
     "autonomy": 80,
     "crossfader": 0.0,
     "active_deck": 1,
@@ -123,13 +128,21 @@ def db_connect():
     return conn
 
 
+_TRACK_COLS = "id, filepath, filename, bpm, key, energy, camelot"
+
+
 def all_tracks() -> list[dict]:
     if not os.path.exists(DB_PATH):
         return []
     conn = db_connect()
-    rows = conn.execute(
-        "SELECT id, filepath, filename, bpm, key, energy FROM tracks ORDER BY filename"
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            f"SELECT {_TRACK_COLS} FROM tracks ORDER BY filename"
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = conn.execute(
+            "SELECT id, filepath, filename, bpm, key, energy FROM tracks ORDER BY filename"
+        ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
 
@@ -139,13 +152,88 @@ def search_tracks(query: str) -> list[dict]:
         return []
     conn = db_connect()
     like = f"%{query.strip()}%"
-    rows = conn.execute(
-        "SELECT id, filepath, filename, bpm, key, energy FROM tracks "
-        "WHERE filename LIKE ? OR filepath LIKE ? ORDER BY filename",
-        (like, like),
-    ).fetchall()
+    try:
+        rows = conn.execute(
+            f"SELECT {_TRACK_COLS} FROM tracks "
+            "WHERE filename LIKE ? OR filepath LIKE ? ORDER BY filename",
+            (like, like),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = conn.execute(
+            "SELECT id, filepath, filename, bpm, key, energy FROM tracks "
+            "WHERE filename LIKE ? OR filepath LIKE ? ORDER BY filename",
+            (like, like),
+        ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def _remember_played(track: Optional[dict]) -> None:
+    if not track or track.get("id") is None:
+        return
+    tid = track["id"]
+    recent = state.setdefault("recent_track_ids", [])
+    if recent and recent[-1] == tid:
+        return
+    recent.append(tid)
+    # Keep a little more than max recency window
+    if len(recent) > 64:
+        del recent[:-64]
+
+
+def _request_track_ids() -> set:
+    ids: set = set()
+    for item in state.get("queue") or []:
+        track = item.get("track") if isinstance(item, dict) else None
+        if track and track.get("id") is not None:
+            ids.add(track["id"])
+        elif isinstance(item, dict) and item.get("id") is not None and item.get("found"):
+            # queue item may itself be a matched track-shaped dict
+            pass
+    return ids
+
+
+def build_next_picks(*, plan: Optional[str] = None, k: int = 3) -> dict:
+    cfg = load_settings()
+    dj_cfg = cfg.get("dj") or {}
+    plan_name = plan or state.get("dj_plan") or dj_cfg.get("plan") or "build"
+    if plan_name not in selector_plan_names():
+        plan_name = "build"
+    current = state.get("current_track")
+    tracks = all_tracks()
+    if not current:
+        current = tracks[0] if tracks else None
+    if not current:
+        return {"plan": plan_name, "picks": [], "current": None}
+    weights = dj_cfg.get("weights") or {}
+    recency_n = int(dj_cfg.get("recency_n") or 8)
+    ctx = {
+        "weights": weights,
+        "plan": plan_name,
+        "recent_ids": list(state.get("recent_track_ids") or []),
+        "recency_n": recency_n,
+        "request_ids": _request_track_ids(),
+    }
+    ranked = selector_pick(current, tracks, ctx=ctx, k=k)
+    picks = []
+    for row in ranked:
+        t = row["track"]
+        picks.append(
+            {
+                "id": t.get("id"),
+                "filename": t.get("filename"),
+                "bpm": t.get("bpm"),
+                "key": t.get("key"),
+                "camelot": t.get("camelot"),
+                "energy": t.get("energy"),
+                "score": round(float(row["score"]), 4),
+                "reasons": row["reasons"],
+                "reason": row["reason"],
+            }
+        )
+    state["next_suggestions"] = picks
+    state["dj_plan"] = plan_name
+    return {"plan": plan_name, "picks": picks, "current": current}
 
 
 def compatible_keys(key: Optional[str]) -> list[str]:
@@ -707,6 +795,10 @@ class TakeoverRequest(BaseModel):
     enabled: bool = True
 
 
+class DjPlanRequest(BaseModel):
+    plan: str = "build"
+
+
 class ChatIn(BaseModel):
     author: str = "Fan"
     message: str
@@ -877,6 +969,7 @@ def skip_track(_auth: None = Depends(require_operator)):
     if is_killed():
         return {"status": "killed"}
     if state["queue"]:
+        _remember_played(state.get("current_track"))
         item = state["queue"].pop(0)
         state["current_track"] = item.get("track") or item
         state["playing"] = True
@@ -909,6 +1002,9 @@ def load_track(req: LoadTrackRequest, _auth: None = Depends(require_operator)):
         return refused
     if refused and result.get("reason") in ("automation_off", "manual_takeover"):
         return refused
+    prev = state.get("current_track")
+    if prev and prev.get("id") != track.get("id"):
+        _remember_played(prev)
     state["current_track"] = track
     state["active_deck"] = req.deck
     if getattr(dj, "simulator", None) is not None:
@@ -916,6 +1012,64 @@ def load_track(req: LoadTrackRequest, _auth: None = Depends(require_operator)):
     push_log(f"Loaded {track['filename']} → deck {req.deck}")
     publish_state()
     return {"status": "loaded", "current_track": track, "deck": req.deck, "midi": result}
+
+
+@app.get("/dj/next")
+def dj_next(
+    plan: Optional[str] = None,
+    k: int = 3,
+    announce: bool = False,
+    _auth: None = Depends(require_operator),
+):
+    """Top-k next-track suggestions with plain-word reasons."""
+    if is_killed():
+        return {"status": "killed"}
+    k = max(1, min(10, int(k or 3)))
+    if plan:
+        if plan not in selector_plan_names():
+            raise HTTPException(status_code=422, detail=f"plan must be one of {selector_plan_names()}")
+        save_settings({"dj": {"plan": plan}})
+    result = build_next_picks(plan=plan, k=k)
+    picks = result["picks"]
+    announced = False
+    if announce and picks:
+        cfg = load_settings()
+        halo = cfg.get("halo") or {}
+        # Respect DJ quiet / full mute — no booth chatter while Charles is mixing quiet
+        if not halo.get("dj_mode_silent") and not halo.get("dj_mode"):
+            top = picks[0]
+            title = top.get("filename") or "the next track"
+            reason = top.get("reason") or "best fit"
+            queued_speak(f"Next up suggestion: {title}. {reason}.", mood="hype")
+            announced = True
+    publish_state()
+    return {
+        "status": "ok",
+        "plan": result["plan"],
+        "plans": selector_plan_names(),
+        "picks": picks,
+        "announced": announced,
+        "current": {
+            "id": (result["current"] or {}).get("id"),
+            "filename": (result["current"] or {}).get("filename"),
+            "bpm": (result["current"] or {}).get("bpm"),
+            "key": (result["current"] or {}).get("key"),
+            "camelot": (result["current"] or {}).get("camelot"),
+            "energy": (result["current"] or {}).get("energy"),
+        }
+        if result["current"]
+        else None,
+    }
+
+
+@app.post("/dj/plan")
+def set_dj_plan(req: DjPlanRequest, _auth: None = Depends(require_operator)):
+    if req.plan not in selector_plan_names():
+        raise HTTPException(status_code=422, detail=f"plan must be one of {selector_plan_names()}")
+    save_settings({"dj": {"plan": req.plan}})
+    state["dj_plan"] = req.plan
+    publish_state()
+    return {"status": "ok", "plan": req.plan}
 
 
 @app.post("/action/crossfade")

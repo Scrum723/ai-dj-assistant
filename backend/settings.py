@@ -97,6 +97,15 @@ DEFAULTS = {
         "automation": False,
         "manual_takeover": False,
         "takeover_minutes": 5,
+        "plan": "build",
+        "recency_n": 8,
+        "weights": {
+            "bpm_fit": 1.0,
+            "camelot_fit": 1.0,
+            "energy_fit": 1.0,
+            "recency": 1.0,
+            "request_bonus": 1.5,
+        },
     },
     "shows": [],  # [{start_iso, title}, ...]
     "moderation": {
