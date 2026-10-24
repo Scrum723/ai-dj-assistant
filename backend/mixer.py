@@ -237,7 +237,10 @@ class Mixer:
         self.transitions: list[TransitionRecord] = []
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
+        self._paused = False
         self._log: list[dict] = []
+        self.last_heartbeat: float = self.clock()
+        self.on_heartbeat: Optional[Callable[[], None]] = None
 
     def position_beats(self) -> float:
         if self.play_started_at is None or not self.outgoing:
@@ -310,6 +313,7 @@ class Mixer:
         self.state = MixState.PLAYING
         self.play_started_at = self.clock()
         self.play_origin_beats = 0.0
+        self.tick_heartbeat()
         sim = getattr(self.controller, "simulator", None)
         if sim is not None:
             sim.load_track(deck, track)
@@ -351,13 +355,14 @@ class Mixer:
         phrase_beat = transition_start_beat(self.outgoing)
         # Wait until phrase boundary if still early
         while True:
+            self.tick_heartbeat()
             pos = self.position_beats()
             if pos + 1e-6 >= phrase_beat:
                 break
             bpm = track_bpm(self.outgoing)
             wait = beats_to_sec(phrase_beat - pos, bpm)
             await self._sleep(max(0.0, min(wait, 0.25)))
-            if self._stop.is_set():
+            if self._stop.is_set() or self._paused:
                 break
 
         self.state = MixState.TRANSITIONING
@@ -369,8 +374,9 @@ class Mixer:
         ordered = sorted(steps, key=lambda s: s.at_bar)
         last_bar = 0.0
         for step in ordered:
-            if self._stop.is_set():
+            if self._stop.is_set() or self._paused:
                 break
+            self.tick_heartbeat()
             delta_bars = step.at_bar - last_bar
             if delta_bars > 0:
                 await self._sleep(bars_to_sec(delta_bars, bpm))
@@ -446,16 +452,37 @@ class Mixer:
 
     def stop(self) -> None:
         self._stop.set()
+        self._paused = False
         self.state = MixState.IDLE
+
+    def pause(self) -> None:
+        """Halt mix loop (manual takeover). Leaves deck state as-is."""
+        self._paused = True
+        self._stop.set()
+        self.enabled = False
+
+    def resume(self) -> None:
+        self._paused = False
+        self._stop.clear()
+
+    def tick_heartbeat(self) -> None:
+        self.last_heartbeat = self.clock()
+        if self.on_heartbeat is not None:
+            try:
+                self.on_heartbeat()
+            except Exception:
+                logger.exception("mixer on_heartbeat failed")
 
     def status(self) -> dict:
         return {
             "state": self.state.value,
             "enabled": self.enabled,
+            "paused": self._paused,
             "active_deck": self.active_deck,
             "position_beats": self.position_beats(),
             "drift_beats": self.drift_beats,
             "outgoing_id": (self.outgoing or {}).get("id"),
             "incoming_id": (self.incoming or {}).get("id"),
             "transitions": len(self.transitions),
+            "last_heartbeat": self.last_heartbeat,
         }

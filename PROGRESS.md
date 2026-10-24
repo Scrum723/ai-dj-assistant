@@ -24,7 +24,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] C2 — Track analysis v2 — full-track BPM/key/Camelot/beats/phrases/energy; rekordbox XML import; lazy librosa; migration
 - [x] C3 — Next-track selection — selector score/pick (BPM half/double, Camelot, energy plan, recency, request bonus), plans warmup/build/peak/cooldown, GET /dj/next, dashboard top 3 load-to-other-deck, Halo announce respects DJ mode
 - [x] C4 — Mix engine, replays and transition scoring
-- [ ] C5 — Safety fallback and manual override
+- [x] C5 — Safety fallback and manual override — MIDI-in takeover (guarded), silence watchdog, heartbeat stall→panic, dj_actions.jsonl; Mac-only skipped in CI
 - [ ] D1 — Alpha hardening and launch
 
 ## Blocked on Charles

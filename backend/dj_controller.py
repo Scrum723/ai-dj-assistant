@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import threading
-from typing import Any, Optional
+import time
+from pathlib import Path
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+ACTIONS_LOG = Path(
+    os.getenv("DATA_DIR") or Path(__file__).resolve().parent
+) / "dj_actions.jsonl"
 
 # Per-deck MIDI_MAP: deck 1 → channel 0, deck 2 → channel 1. Same CC numbers per deck.
 # Crossfader is global on channel 0.
@@ -91,13 +98,22 @@ class DJController:
         backend: Optional[str] = None,
         outport: Any = None,
         simulator: Any = None,
+        actions_log: Optional[Path] = None,
     ):
         self.port_name = port_name
         self.outport = None
+        self.inport = None
         self.error: Optional[str] = None
         self.simulator = simulator
         self.backend = (backend or os.getenv("DJ_BACKEND") or "midi").strip().lower()
         self._tap_timers: list[threading.Timer] = []
+        self._takeover_timer: Optional[threading.Timer] = None
+        self._midi_in_thread: Optional[threading.Thread] = None
+        self._midi_in_stop = threading.Event()
+        self._on_takeover: Optional[Callable[[], None]] = None
+        self._actions_log = Path(actions_log) if actions_log else ACTIONS_LOG
+        self.midi_in_port_name: Optional[str] = None
+        self.last_foreign_midi_at: Optional[float] = None
         if outport is not None:
             self.outport = outport
             if simulator is None and hasattr(outport, "simulator"):
@@ -108,6 +124,19 @@ class DJController:
     @property
     def connected(self) -> bool:
         return self.outport is not None
+
+    def set_takeover_callback(self, cb: Optional[Callable[[], None]]) -> None:
+        """Called when foreign MIDI input triggers manual takeover (e.g. pause Mixer)."""
+        self._on_takeover = cb
+
+    def _log_action(self, payload: dict) -> None:
+        row = {"ts": time.time(), **payload}
+        try:
+            self._actions_log.parent.mkdir(parents=True, exist_ok=True)
+            with self._actions_log.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except Exception:
+            logger.exception("dj_actions log failed")
 
     def _initialize_midi(self) -> None:
         if self.backend == "sim":
@@ -143,27 +172,43 @@ class DJController:
         from sentinel import is_killed
 
         if is_killed():
-            return {"ok": False, "reason": "killed"}
+            result = {"ok": False, "reason": "killed"}
+            self._log_action({"command": command, "deck": deck, "value": value, "source": source, **result})
+            return result
 
         src = (source or "manual").lower()
         if src == "auto":
             dj = _dj_settings()
             if not bool(dj.get("automation", False)):
-                return {"ok": False, "reason": "automation_off"}
+                result = {"ok": False, "reason": "automation_off"}
+                self._log_action({"command": command, "deck": deck, "value": value, "source": src, **result})
+                return result
             if bool(dj.get("manual_takeover", False)):
-                return {"ok": False, "reason": "manual_takeover"}
+                result = {"ok": False, "reason": "manual_takeover"}
+                self._log_action({"command": command, "deck": deck, "value": value, "source": src, **result})
+                return result
 
         if command == "crossfader":
-            return self._send_crossfader(value)
+            result = self._send_crossfader(value)
+            result.setdefault("source", src)
+            self._log_action({"command": "crossfader", "deck": deck, "value": value, "source": src, **result})
+            return result
 
         if command == "panic":
-            return self._panic()
+            result = self._panic()
+            result.setdefault("source", src)
+            self._log_action({"command": "panic", "deck": deck, "value": value, "source": src, **result})
+            return result
 
         if command not in DECK_COMMANDS:
-            return {"ok": False, "reason": "bad_command"}
+            result = {"ok": False, "reason": "bad_command"}
+            self._log_action({"command": command, "deck": deck, "value": value, "source": src, **result})
+            return result
 
         if deck not in (1, 2):
-            return {"ok": False, "reason": "bad_deck"}
+            result = {"ok": False, "reason": "bad_deck"}
+            self._log_action({"command": command, "deck": deck, "value": value, "source": src, **result})
+            return result
 
         deck_map = MIDI_MAP["decks"][deck]
         channel = int(deck_map["channel"])
@@ -176,8 +221,10 @@ class DJController:
             ok = self._send_cc(channel, control, midi_val)
 
         if not ok:
-            return {"ok": False, "reason": "no_port"}
-        return {
+            result = {"ok": False, "reason": "no_port"}
+            self._log_action({"command": command, "deck": deck, "value": value, "source": src, **result})
+            return result
+        result = {
             "ok": True,
             "command": command,
             "deck": deck,
@@ -185,6 +232,8 @@ class DJController:
             "control": control,
             "source": src,
         }
+        self._log_action({"value": value, **result})
+        return result
 
     def _send_cc(self, channel: int, control: int, value: int) -> bool:
         if not self.outport:
@@ -290,11 +339,117 @@ class DJController:
         from sentinel import is_killed
 
         if is_killed():
-            return {"ok": False, "reason": "killed"}
+            result = {"ok": False, "reason": "killed"}
+            self._log_action({"command": "panic", "source": source, **result})
+            return result
         if (source or "").lower() == "auto":
             dj = _dj_settings()
             if not bool(dj.get("automation", False)):
-                return {"ok": False, "reason": "automation_off"}
+                result = {"ok": False, "reason": "automation_off"}
+                self._log_action({"command": "panic", "source": source, **result})
+                return result
             if bool(dj.get("manual_takeover", False)):
-                return {"ok": False, "reason": "manual_takeover"}
-        return self._panic()
+                result = {"ok": False, "reason": "manual_takeover"}
+                self._log_action({"command": "panic", "source": source, **result})
+                return result
+        result = self._panic()
+        result.setdefault("source", (source or "manual").lower())
+        self._log_action({"command": "panic", **result})
+        return result
+
+    # --- Manual takeover + MIDI input (guarded) ---
+
+    def trigger_manual_takeover(self, *, minutes: Optional[float] = None) -> dict:
+        """Human touch / foreign MIDI → pause automation for takeover_minutes."""
+        from settings import save as save_settings
+
+        dj = _dj_settings()
+        mins = float(minutes if minutes is not None else dj.get("takeover_minutes", 5) or 5)
+        save_settings({"dj": {"manual_takeover": True}})
+        if self._takeover_timer is not None:
+            try:
+                self._takeover_timer.cancel()
+            except Exception:
+                pass
+        if mins > 0:
+
+            def _clear() -> None:
+                try:
+                    from settings import save as _save
+
+                    _save({"dj": {"manual_takeover": False}})
+                    logger.info("Manual takeover auto-cleared after %s min", mins)
+                except Exception:
+                    logger.exception("takeover clear failed")
+
+            self._takeover_timer = threading.Timer(mins * 60.0, _clear)
+            self._takeover_timer.daemon = True
+            self._takeover_timer.start()
+        if self._on_takeover is not None:
+            try:
+                self._on_takeover()
+            except Exception:
+                logger.exception("on_takeover callback failed")
+        self.last_foreign_midi_at = time.monotonic()
+        return {"ok": True, "manual_takeover": True, "minutes": mins}
+
+    def ingest_midi_input(self, msg: Any) -> Optional[dict]:
+        """Process a foreign MIDI CC/note as human takeover (sim or live)."""
+        typ = getattr(msg, "type", None) or (msg.get("type") if isinstance(msg, dict) else None)
+        if typ not in ("control_change", "note_on", "note_off"):
+            return None
+        if typ == "note_off":
+            return None
+        if typ == "note_on":
+            vel = int(getattr(msg, "velocity", None) or (msg.get("velocity") if isinstance(msg, dict) else 0) or 0)
+            if vel <= 0:
+                return None
+        return self.trigger_manual_takeover()
+
+    def start_midi_input(self, port_name: Optional[str] = None) -> dict:
+        """Optional MIDI input listener. Guarded mido import; no-op without mido/port."""
+        name = (port_name or os.getenv("DJ_MIDI_IN_PORT") or "").strip()
+        if not name:
+            dj = _dj_settings()
+            name = str((dj.get("midi_in_port") or "")).strip()
+        if not name:
+            return {"ok": False, "reason": "no_port_configured"}
+        mido = _load_mido()
+        if mido is None:
+            return {"ok": False, "reason": "no_mido"}
+        self.stop_midi_input()
+        self.midi_in_port_name = name
+        self._midi_in_stop.clear()
+        try:
+            self.inport = mido.open_input(name)
+        except Exception as e:
+            self.error = f"MIDI in: {e}"
+            logger.warning("MIDI input open failed: %s", e)
+            return {"ok": False, "reason": str(e)}
+
+        def _loop() -> None:
+            while not self._midi_in_stop.is_set():
+                try:
+                    for msg in self.inport.iter_pending():
+                        self.ingest_midi_input(msg)
+                    self._midi_in_stop.wait(0.02)
+                except Exception:
+                    if self._midi_in_stop.is_set():
+                        break
+                    logger.exception("MIDI input loop error")
+                    self._midi_in_stop.wait(0.2)
+
+        self._midi_in_thread = threading.Thread(target=_loop, name="midi-in", daemon=True)
+        self._midi_in_thread.start()
+        logger.info("MIDI input listening on '%s'", name)
+        return {"ok": True, "port": name}
+
+    def stop_midi_input(self) -> None:
+        self._midi_in_stop.set()
+        if self.inport is not None:
+            try:
+                self.inport.close()
+            except Exception:
+                pass
+            self.inport = None
+        self._midi_in_thread = None

@@ -97,6 +97,7 @@ DEFAULTS = {
         "automation": False,
         "manual_takeover": False,
         "takeover_minutes": 5,
+        "midi_in_port": "",
         "plan": "build",
         "recency_n": 8,
         "weights": {

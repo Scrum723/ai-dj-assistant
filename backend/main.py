@@ -42,6 +42,7 @@ from settings import load as load_settings
 from settings import public_settings, save as save_settings
 from trainer import idle_trainer
 from voice import MAC_VOICES, resolve_voice_file, synthesize
+from watchdog import Watchdog
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -49,6 +50,16 @@ logger = logging.getLogger(__name__)
 dj = DJController(port_name="AI_DJ_Virtual_Port")
 # Automation off by default — enable via POST /dj/automation
 mixer = Mixer(dj, enabled=False)
+watchdog = Watchdog(dj, mixer)
+
+
+def _on_manual_takeover() -> None:
+    mixer.pause()
+    push_log("Manual takeover — mixer paused (foreign MIDI / controller)")
+
+
+dj.set_takeover_callback(_on_manual_takeover)
+mixer.on_heartbeat = watchdog.tick_heartbeat
 DB_PATH = os.path.join(os.path.dirname(__file__), "library.db")
 KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 EQ_BANDS = frozenset({"low", "mid", "hi"})
@@ -294,6 +305,8 @@ def snapshot() -> dict:
         "manual_takeover": bool(dj_cfg.get("manual_takeover", False)),
         "automation": bool(dj_cfg.get("automation", False)),
         "mixer": mixer.status(),
+        "watchdog": watchdog.status(),
+        "alerts": list(watchdog.alerts),
         "sim": sim_snap,
         "agent": agent.status() if agent else {"running": False},
         "settings": cfg,
@@ -714,14 +727,41 @@ async def lifespan(app: FastAPI):
     tracks = all_tracks()
     if tracks and not state["current_track"]:
         state["current_track"] = tracks[0]
+
+    # Optional MIDI input (Mac controller); no-op if port unset / mido missing
+    midi_in = ((cfg.get("dj") or {}).get("midi_in_port") or os.getenv("DJ_MIDI_IN_PORT") or "").strip()
+    if midi_in:
+        started = dj.start_midi_input(midi_in)
+        if started.get("ok"):
+            logger.info("MIDI input: %s", started.get("port"))
+        else:
+            logger.info(
+                "MIDI input skipped (%s). Blocked on Charles: controller, BlackHole, rekordbox.",
+                started.get("reason"),
+            )
+    else:
+        logger.info(
+            "C5 safety: MIDI in unset. Blocked on Charles: controller, BlackHole, rekordbox."
+        )
+
+    async def _watchdog_worker() -> None:
+        while True:
+            try:
+                watchdog.check()
+            except Exception:
+                logger.exception("watchdog tick failed")
+            await asyncio.sleep(0.2)
+
+    watchdog_task = asyncio.create_task(_watchdog_worker())
     logger.info("DJ Bot Botty online. Halo LLM buddy started. Community aggregator ready.")
     yield
     trainer_stop.set()
+    dj.stop_midi_input()
     if aggregator:
         aggregator.stop()
     if agent:
         agent.stop()
-    for task in (agent_task, speech_task, trainer_task, presence_task):
+    for task in (agent_task, speech_task, trainer_task, presence_task, watchdog_task):
         if task:
             task.cancel()
 

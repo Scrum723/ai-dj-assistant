@@ -195,6 +195,17 @@ class DeckSimulator:
             return 1 if self.crossfader < 0.5 else 2
         return None
 
+    def output_level(self) -> float:
+        """Approximate master level 0–1 for silence watchdog (sim)."""
+        xf = float(self.crossfader)
+        level = 0.0
+        for n, weight in ((1, 1.0 - xf), (2, xf)):
+            d = self.decks[n]
+            if d.playing:
+                vol = float(d.volume or 0.0)
+                level = max(level, vol * max(weight, 0.05))
+        return level
+
     def panic(self) -> None:
         """Reset EQ/filter; centre crossfader toward the playing deck."""
         for d in self.decks.values():
