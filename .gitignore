@@ -10,9 +10,12 @@ logs/
 backend/users.db
 backend/halo.db
 backend/community.db
+backend/library.db
 backend/halo_training.jsonl
 backend/sentinel_incidents.jsonl
 backend/dj_actions.jsonl
+backend/backups/
+**/backups/
 Halo.app/
 voice_cache/
 .pytest_cache/

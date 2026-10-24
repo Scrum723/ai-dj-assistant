@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, "alpha/**"]
+  pull_request:
+
+jobs:
+  test-python:
+    runs-on: ubuntu-latest
+    env:
+      DJ_BACKEND: sim
+      HALO_PROVIDER: gemini
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-cloud.txt
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-cloud.txt
+          pip install pytest httpx
+      - name: Pytest
+        # Full suite; test_community_b1 / test_a3_halo_room no longer hang
+        # (ingest via ASGI /chat, not aggregator.ingest from the pytest thread).
+        run: python -m pytest -q
+
+  build-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend-dashboard/package-lock.json
+      - name: Build dashboard
+        working-directory: frontend-dashboard
+        run: |
+          npm ci
+          npm run build
+
+  build-overlay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: backend/frontend-overlay/package-lock.json
+      - name: Build overlay
+        working-directory: backend/frontend-overlay
+        run: |
+          npm ci
+          npm run build

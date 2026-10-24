@@ -241,6 +241,12 @@ class Aggregator:
             except Exception:
                 logger.exception("adapter is_ready %s failed", name)
             if enabled and ready:
+                clear = getattr(adapter, "clear_auto_disable", None)
+                if callable(clear):
+                    try:
+                        clear()
+                    except Exception:
+                        logger.exception("clear_auto_disable failed for %s", name)
                 try:
                     adapter.start(self.ingest)
                     logger.info("community adapter %s started channel=%s", name, adapter.channel)
@@ -284,6 +290,14 @@ class Aggregator:
         self._apply_adapter_config(name, adapter, acfg)
         if enabled is None:
             enabled = bool(acfg.get("enabled"))
+        # Re-enable clears experimental auto-disable trip so settings can revive it.
+        if enabled:
+            clear = getattr(adapter, "clear_auto_disable", None)
+            if callable(clear):
+                try:
+                    clear()
+                except Exception:
+                    logger.exception("clear_auto_disable failed for %s", name)
         ready = bool(adapter.is_ready()) if hasattr(adapter, "is_ready") else bool(adapter.channel)
         if enabled and ready:
             try:

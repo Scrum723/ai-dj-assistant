@@ -19,7 +19,16 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, 
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
-DB_PATH = Path(__file__).resolve().parent / "users.db"
+def _users_db_path() -> Path:
+    raw = os.getenv("DATA_DIR")
+    if raw:
+        p = Path(raw)
+        p.mkdir(parents=True, exist_ok=True)
+        return p / "users.db"
+    return Path(__file__).resolve().parent / "users.db"
+
+
+DB_PATH = _users_db_path()
 COOKIE = "djbb_session"
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -156,13 +165,15 @@ def _default_perks() -> dict:
 
 
 def _set_cookie(response: Response, token: str) -> None:
+    from ops import cookie_secure
+
     response.set_cookie(
         COOKIE,
         token,
         httponly=True,
         samesite="lax",
         max_age=60 * 60 * 24 * 30,
-        secure=os.getenv("COOKIE_SECURE", "").lower() in {"1", "true"},
+        secure=cookie_secure(),
     )
 
 
@@ -191,9 +202,13 @@ def user_by_id(user_id: Any) -> Optional[dict[str, Any]]:
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    """Client IP. X-Forwarded-For is trusted only behind Railway / TRUSTED_PROXY=1."""
+    from ops import trusted_proxy
+
+    if trusted_proxy():
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            return forwarded.split(",")[0].strip()
     if request.client:
         return request.client.host or ""
     return ""

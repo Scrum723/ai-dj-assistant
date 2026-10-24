@@ -141,6 +141,13 @@ class ExperimentalMixin:
                 pass
         return True
 
+    def clear_auto_disable(self) -> None:
+        """Clear trip state when operator re-enables the adapter in settings."""
+        self._tracker.reset()
+        self._auto_disabled = False
+        if getattr(self, "_error", None) and "auto-disabled" in str(self._error):
+            self._error = None
+
     def experimental_status(self) -> dict[str, Any]:
         st = self._tracker.status()
         st["experimental"] = True

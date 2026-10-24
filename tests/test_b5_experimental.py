@@ -168,6 +168,31 @@ def test_adapter_auto_disable_and_alert():
     assert alerts and alerts[0].get("experimental") is True
 
 
+def test_clear_auto_disable_on_reenable():
+    ad = TikTokAdapter(username="host")
+    ad._tracker = FailureTracker(max_failures=1, window_sec=600)
+    assert ad._note_failure("boom") is True
+    assert ad._auto_disabled is True
+    ad.clear_auto_disable()
+    assert ad._auto_disabled is False
+    assert ad._tracker.tripped is False
+
+    settings = {"community": {"adapters": {"tiktok": {"enabled": False, "username": "host"}}}}
+    agg = Aggregator(get_settings=lambda: settings)
+    ad2 = TikTokAdapter(username="host")
+    ad2._auto_disabled = True
+    ad2._tracker = FailureTracker(max_failures=1, window_sec=600)
+    ad2._tracker.record_failure()
+    assert ad2._tracker.tripped is True
+    agg.register(ad2)
+    # enabled=True clears trip even if start is skipped (not ready / disabled channel ok)
+    settings["community"]["adapters"]["tiktok"]["enabled"] = True
+    agg.configure_adapter("tiktok", enabled=True)
+    assert ad2._auto_disabled is False
+    assert ad2._tracker.tripped is False
+    agg.stop()
+
+
 def test_aggregator_flag_gating_skips_disabled():
     settings = {
         "community": {

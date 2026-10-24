@@ -21,11 +21,20 @@ load_dotenv()
 BRAIN_URL = os.getenv("AI_DJ_BRAIN_URL", "http://127.0.0.1:8000")
 
 
+def _headers() -> dict:
+    """Send X-Operator-Key when OPERATOR_KEY is set (cloud /agent/youtube, etc.)."""
+    key = (os.getenv("OPERATOR_KEY") or "").strip()
+    if key:
+        return {"X-Operator-Key": key}
+    return {}
+
+
 def forward(author, message, platform="youtube"):
     try:
         requests.post(
             f"{BRAIN_URL}/chat",
             json={"author": author, "message": message, "platform": platform},
+            headers=_headers(),
             timeout=5,
         )
     except Exception as e:
@@ -35,7 +44,12 @@ def forward(author, message, platform="youtube"):
 if __name__ == "__main__":
     video_id = sys.argv[1] if len(sys.argv) > 1 else None
     if video_id:
-        requests.post(f"{BRAIN_URL}/agent/youtube", json={"video_id": video_id}, timeout=5)
+        requests.post(
+            f"{BRAIN_URL}/agent/youtube",
+            json={"video_id": video_id},
+            headers=_headers(),
+            timeout=5,
+        )
         try:
             import pytchat
         except Exception as e:

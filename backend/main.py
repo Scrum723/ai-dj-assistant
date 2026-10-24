@@ -10,9 +10,10 @@ from typing import Any, Optional
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from auth import COOKIE, require_operator, require_room_mod, set_email_opt_in, user_from_cookie
 from auth import router as auth_router
@@ -34,6 +35,16 @@ from community.schema import ChatMessage, ChatUser
 from community.store import CommunityStore, DEFAULT_RETENTION_DAYS
 from dj_controller import DJController, MIDI_MAP
 from mixer import Mixer
+from ops import (
+    allow_ip,
+    check_adapter_down_alerts,
+    configure_json_logging,
+    cors_origins,
+    data_dir,
+    init_sentry,
+    maybe_daily_backup,
+    new_request_id,
+)
 from selector import pick as selector_pick
 from selector import plan_names as selector_plan_names
 from sentinel import is_killed
@@ -44,8 +55,10 @@ from trainer import idle_trainer
 from voice import MAC_VOICES, resolve_voice_file, synthesize
 from watchdog import Watchdog
 
+configure_json_logging()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+init_sentry()
 
 dj = DJController(port_name="AI_DJ_Virtual_Port")
 # Automation off by default — enable via POST /dj/automation
@@ -60,7 +73,7 @@ def _on_manual_takeover() -> None:
 
 dj.set_takeover_callback(_on_manual_takeover)
 mixer.on_heartbeat = watchdog.tick_heartbeat
-DB_PATH = os.path.join(os.path.dirname(__file__), "library.db")
+DB_PATH = str(data_dir() / "library.db")
 KEYS = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
 EQ_BANDS = frozenset({"low", "mid", "hi"})
 
@@ -501,6 +514,10 @@ async def presence_worker():
 async def lifespan(app: FastAPI):
     global agent, aggregator, community_store, community_mod, speech_queue, agent_task, speech_task, presence_task, _main_loop
     _main_loop = asyncio.get_running_loop()
+    try:
+        maybe_daily_backup()
+    except Exception:
+        logger.exception("daily backup failed")
     speech_queue = asyncio.Queue(maxsize=12)
     speech_task = asyncio.create_task(speech_worker())
     cfg = load_settings()
@@ -752,7 +769,21 @@ async def lifespan(app: FastAPI):
                 logger.exception("watchdog tick failed")
             await asyncio.sleep(0.2)
 
+    async def _adapter_health_worker() -> None:
+        while True:
+            try:
+                await asyncio.sleep(30.0)
+                if not aggregator:
+                    continue
+                st = (aggregator.status() or {}).get("adapters") or {}
+                check_adapter_down_alerts(st, on_alert=_operator_alert)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("adapter health watch failed")
+
     watchdog_task = asyncio.create_task(_watchdog_worker())
+    adapter_health_task = asyncio.create_task(_adapter_health_worker())
     logger.info("DJ Bot Botty online. Halo LLM buddy started. Community aggregator ready.")
     yield
     trainer_stop.set()
@@ -761,21 +792,42 @@ async def lifespan(app: FastAPI):
         aggregator.stop()
     if agent:
         agent.stop()
-    for task in (agent_task, speech_task, trainer_task, presence_task, watchdog_task):
+    for task in (agent_task, speech_task, trainer_task, presence_task, watchdog_task, adapter_health_task):
         if task:
             task.cancel()
 
 
 app = FastAPI(title="DJ Bot Botty", lifespan=lifespan)
+
+
+class RequestContextMiddleware(BaseHTTPMiddleware):
+    """JSON-friendly request id + IP rate limits on public chat/auth routes."""
+
+    RATE_PREFIXES = ("/chat", "/request", "/auth")
+
+    async def dispatch(self, request: Request, call_next):
+        rid = request.headers.get("x-request-id") or new_request_id()
+        request.state.request_id = rid
+        path = request.url.path or ""
+        if any(path == p or path.startswith(p + "/") for p in self.RATE_PREFIXES):
+            from auth import _client_ip
+
+            ip = _client_ip(request)
+            if not allow_ip(ip, path=path):
+                return JSONResponse(
+                    {"detail": "rate limit", "request_id": rid},
+                    status_code=429,
+                    headers={"X-Request-Id": rid},
+                )
+        response = await call_next(request)
+        response.headers["X-Request-Id"] = rid
+        return response
+
+
+app.add_middleware(RequestContextMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-        "https://djbotbotty.com",
-        "https://www.djbotbotty.com",
-        "https://halo-dj-production.up.railway.app",
-    ],
+    allow_origins=cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1700,6 +1752,16 @@ async def websocket_endpoint(ws: WebSocket):
 
 @app.websocket("/ws/room")
 async def room_websocket(ws: WebSocket):
+    # IP rate limit on connect (mirrors HTTP /chat limits)
+    client = ws.client
+    ip = (client.host if client else "") or "unknown"
+    if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("TRUSTED_PROXY", "").lower() in {"1", "true", "yes"}:
+        forwarded = ws.headers.get("x-forwarded-for", "")
+        if forwarded:
+            ip = forwarded.split(",")[0].strip() or ip
+    if not allow_ip(ip, path="/ws/room"):
+        await ws.close(code=1008)
+        return
     await room_hub.connect(ws)
     try:
         if community_store:

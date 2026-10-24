@@ -23,12 +23,15 @@ os.environ.setdefault("HALO_PROVIDER", "gemini")
 @pytest.fixture(autouse=True)
 def _reset_moderation_and_kill():
     from moderation import reset_rate_limits
+    from ops import reset_ip_limits
     from sentinel import set_killed
 
     reset_rate_limits()
+    reset_ip_limits()
     set_killed(False)
     yield
     reset_rate_limits()
+    reset_ip_limits()
     set_killed(False)
 
 

@@ -25,7 +25,7 @@ Spec: `docs/djbotbotty_full_build_prompt.md`
 - [x] C3 — Next-track selection — selector score/pick (BPM half/double, Camelot, energy plan, recency, request bonus), plans warmup/build/peak/cooldown, GET /dj/next, dashboard top 3 load-to-other-deck, Halo announce respects DJ mode
 - [x] C4 — Mix engine, replays and transition scoring
 - [x] C5 — Safety fallback and manual override — MIDI-in takeover (guarded), silence watchdog, heartbeat stall→panic, dj_actions.jsonl; Mac-only skipped in CI
-- [ ] D1 — Alpha hardening and launch
+- [x] D1 — Alpha hardening and launch — CI (pytest + dashboard/overlay), JSON logs/request id, IP rate limits, COOKIE_SECURE on Railway, CORS_ORIGINS, DATA_DIR daily backups, alpha checklist + README rollback; WS hang fixed in test_community_b1
 
 ## Blocked on Charles
 
@@ -49,10 +49,12 @@ Concrete setup checklist (no credentials invented here — create these when rea
 - [ ] **A6:** Live test donation / Super Chat / sub on one platform
 
 ### Railway / djbotbotty.com (B8 / D1)
-- [ ] Railway volume mounted at `DATA_DIR`
+- [ ] Railway volume mounted at `DATA_DIR` (app will write DBs + `$DATA_DIR/backups/YYYY-MM-DD/`)
 - [x] Health check → `/healthz` (B8)
-- [ ] Set `OPERATOR_KEY` and `COOKIE_SECURE=true` in production
+- [ ] Set `OPERATOR_KEY` in production (`COOKIE_SECURE` auto when `RAILWAY_ENVIRONMENT` set; still set explicitly if desired)
 - [ ] LLM keys (`GEMINI_API_KEY` or `XAI_API_KEY`) on Railway
+- [ ] Optional: `CORS_ORIGINS`, `SENTRY_DSN`, `LOG_FORMAT=json`
+- [ ] Practice Railway deployment rollback once; note SHA in Notes
 
 ### Mac DJ booth (C1–C5)
 - [ ] **C1 blocker:** Import MIDI Learn mapping on `AI_DJ_Virtual_Port` in rekordbox (see docs/rekordbox-mapping.md)
@@ -62,6 +64,9 @@ Concrete setup checklist (no credentials invented here — create these when rea
 
 ### Alpha dress rehearsal (D1)
 - [ ] Multistream with merged room, Halo, OBS overlay, kill switch
+- [ ] Review/extend `settings.moderation.blocklist` on a live show
+- [ ] Booth-pass link across ≥2 platforms after OAuth apps exist
+- [ ] Enable one official adapter + one relay send with real tokens
 
 ## Notes / deviations
 
