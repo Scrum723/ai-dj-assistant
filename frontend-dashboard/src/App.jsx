@@ -3,6 +3,7 @@ import { Play, Pause, FastForward, Music, Radio, Smartphone, Wifi, WifiOff, Bot,
 import { api, wsUrl } from './api.js';
 import Settings from './Settings.jsx';
 import Room from './Room.jsx';
+import Profile from './Profile.jsx';
 import StreamLinks, { openAllStreams } from './StreamLinks.jsx';
 
 const VIBES = {
@@ -97,6 +98,7 @@ export default function App() {
           <button onClick={() => setActiveTab('host')} style={navBtnStyle(activeTab === 'host', '#db2777')}>{state?.agent?.name || 'Halo'}</button>
           <button onClick={() => setActiveTab('room')} style={navBtnStyle(activeTab === 'room', '#10b981')}>Room</button>
           <button onClick={() => setActiveTab('fan')} style={navBtnStyle(activeTab === 'fan', '#059669')}>Requests</button>
+          <button onClick={() => setActiveTab('profile')} style={navBtnStyle(activeTab === 'profile', '#a78bfa')}>Profile</button>
           <button onClick={() => setActiveTab('settings')} style={navBtnStyle(activeTab === 'settings', '#6366f1')}>Settings</button>
         </div>
       </nav>
@@ -107,6 +109,7 @@ export default function App() {
         {activeTab === 'host' && <CohostPanel state={state} refresh={refresh} />}
         {activeTab === 'room' && <Room state={state} refresh={refresh} />}
         {activeTab === 'fan' && <FanHub refresh={refresh} />}
+        {activeTab === 'profile' && <Profile onBack={() => setActiveTab('dj')} />}
         {activeTab === 'settings' && <Settings state={state} refresh={refresh} />}
       </div>
     </div>
@@ -145,9 +148,22 @@ function DJControls({ state, tracks, refresh }) {
   const playing = !!state?.playing;
   const queue = state?.queue || [];
   const keys = state?.compatible_keys || [];
+  const [uiDeck, setUiDeck] = useState(1);
+  const [nextPicks, setNextPicks] = useState(() => state?.next_suggestions || []);
+  const [djPlan, setDjPlan] = useState(() => state?.dj_plan || 'build');
+  const activeDeck = uiDeck || state?.active_deck || 1;
+  const otherDeck = activeDeck === 1 ? 2 : 1;
+  const takeover = !!state?.manual_takeover;
+  const eq = (state?.deck_eq && (state.deck_eq[activeDeck] || state.deck_eq[String(activeDeck)])) || { low: 0.5, mid: 0.5, hi: 0.5 };
+  const filterVal = (state?.deck_filter && (state.deck_filter[activeDeck] ?? state.deck_filter[String(activeDeck)])) ?? 0.5;
 
-  const play = async () => {
-    await api('/action/play', { method: 'POST', body: JSON.stringify({ deck: 1 }) });
+  useEffect(() => {
+    if (Array.isArray(state?.next_suggestions)) setNextPicks(state.next_suggestions);
+    if (state?.dj_plan) setDjPlan(state.dj_plan);
+  }, [state?.next_suggestions, state?.dj_plan]);
+
+  const play = async (deck = activeDeck) => {
+    await api('/action/play', { method: 'POST', body: JSON.stringify({ deck }) });
     refresh();
   };
   const skip = async () => {
@@ -155,8 +171,22 @@ function DJControls({ state, tracks, refresh }) {
     refresh();
   };
   const load = async (id) => {
-    await api('/action/load', { method: 'POST', body: JSON.stringify({ track_id: id }) });
+    await api('/action/load', { method: 'POST', body: JSON.stringify({ track_id: id, deck: activeDeck }) });
     refresh();
+  };
+  const loadOtherDeck = async (id) => {
+    await api('/action/load', { method: 'POST', body: JSON.stringify({ track_id: id, deck: otherDeck }) });
+    refresh();
+  };
+  const refreshNext = async (plan = djPlan) => {
+    try {
+      const res = await api(`/dj/next?plan=${encodeURIComponent(plan)}&k=3`);
+      setNextPicks(res.picks || []);
+      if (res.plan) setDjPlan(res.plan);
+      refresh();
+    } catch (_) {
+      /* operator auth / offline */
+    }
   };
   const setAutonomy = async (value) => {
     await api('/action/autonomy', { method: 'POST', body: JSON.stringify({ value: Number(value) }) });
@@ -164,16 +194,44 @@ function DJControls({ state, tracks, refresh }) {
   const setCrossfader = async (value) => {
     await api('/action/crossfade', { method: 'POST', body: JSON.stringify({ value: Number(value) }) });
   };
+  const setEq = async (band, value) => {
+    await api('/action/eq', { method: 'POST', body: JSON.stringify({ deck: activeDeck, band, value: Number(value) }) });
+    refresh();
+  };
+  const setFilter = async (value) => {
+    await api('/action/filter', { method: 'POST', body: JSON.stringify({ deck: activeDeck, value: Number(value) }) });
+    refresh();
+  };
+  const syncDeck = async () => {
+    await api('/action/sync', { method: 'POST', body: JSON.stringify({ deck: activeDeck }) });
+    refresh();
+  };
+  const panic = async () => {
+    await api('/action/panic', { method: 'POST', body: '{}' });
+    refresh();
+  };
+  const toggleTakeover = async () => {
+    await api('/action/takeover', { method: 'POST', body: JSON.stringify({ enabled: !takeover }) });
+    refresh();
+  };
 
-  const title = current?.filename || 'No track loaded';
-  const bpm = current?.bpm ? Number(current.bpm).toFixed(1) : '--';
+  const title = current?.filename || 'No track loaded';  const bpm = current?.bpm ? Number(current.bpm).toFixed(1) : '--';
   const key = current?.key || '--';
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '30px' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '30px' }}>
         <div style={cardStyle}>
-          <h2 style={headerStyle}><Music size={20} /> Currently Playing (Deck A)</h2>
+          <h2 style={headerStyle}><Music size={20} /> Currently Playing (Deck {activeDeck === 1 ? 'A' : 'B'})</h2>
+          <div style={{ display: 'flex', gap: 10, marginTop: 12, flexWrap: 'wrap' }}>
+            <button type="button" onClick={() => setUiDeck(1)} style={navBtnStyle(activeDeck === 1, '#7c3aed')}>Deck A</button>
+            <button type="button" onClick={() => setUiDeck(2)} style={navBtnStyle(activeDeck === 2, '#2563eb')}>Deck B</button>
+            <button type="button" onClick={syncDeck} style={navBtnStyle(false, '#374151')}>Sync</button>
+            <button type="button" onClick={panic} style={navBtnStyle(false, '#b91c1c')}>Panic</button>
+            <button type="button" onClick={toggleTakeover} style={navBtnStyle(takeover, takeover ? '#f59e0b' : '#374151')}>
+              {takeover ? 'MANUAL TAKEOVER ON' : 'MANUAL TAKEOVER'}
+            </button>
+          </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', gap: 16, flexWrap: 'wrap' }}>
             <div>
               <h3 style={{ margin: 0, fontSize: '1.6rem', color: '#a78bfa' }}>{title}</h3>
@@ -190,7 +248,7 @@ function DJControls({ state, tracks, refresh }) {
           </div>
 
           <div style={{ display: 'flex', gap: '20px', marginTop: '30px', justifyContent: 'center' }}>
-            <button onClick={play} style={controlBtnStyle('#7c3aed')} aria-label="Play or pause">
+            <button onClick={() => play(activeDeck)} style={controlBtnStyle('#7c3aed')} aria-label="Play or pause">
               {playing ? <Pause size={30} /> : <Play size={30} />}
             </button>
             <button onClick={skip} style={controlBtnStyle('#3b82f6')} aria-label="Skip">
@@ -207,6 +265,27 @@ function DJControls({ state, tracks, refresh }) {
               style={{ width: '100%', marginTop: 8 }}
             />
           </label>
+
+          {['low', 'mid', 'hi'].map((band) => (
+            <label key={band} style={{ display: 'block', marginTop: 12, color: '#9ca3af', fontSize: 14 }}>
+              EQ {band} (deck {activeDeck === 1 ? 'A' : 'B'})
+              <input
+                type="range" min="0" max="1" step="0.01"
+                value={eq[band] ?? 0.5}
+                onChange={(e) => setEq(band, e.target.value)}
+                style={{ width: '100%', marginTop: 8 }}
+              />
+            </label>
+          ))}
+          <label style={{ display: 'block', marginTop: 12, color: '#9ca3af', fontSize: 14 }}>
+            Filter (deck {activeDeck === 1 ? 'A' : 'B'})
+            <input
+              type="range" min="0" max="1" step="0.01"
+              value={filterVal}
+              onChange={(e) => setFilter(e.target.value)}
+              style={{ width: '100%', marginTop: 8 }}
+            />
+          </label>
         </div>
 
         <div style={{ ...cardStyle, borderLeft: '4px solid #f59e0b' }}>
@@ -216,6 +295,64 @@ function DJControls({ state, tracks, refresh }) {
               ? <>The current track is in <strong>{key}</strong>. Smooth mixes usually stay in {keys.join(', ') || key}.</>
               : 'Load a track to get a harmonic mix suggestion from the analyzed library.'}
           </p>
+        </div>
+
+        <div style={{ ...cardStyle, borderLeft: '4px solid #22c55e' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <h2 style={{ ...headerStyle, margin: 0 }}>Next track (top 3)</h2>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {['warmup', 'build', 'peak', 'cooldown'].map((p) => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => refreshNext(p)}
+                  style={navBtnStyle(djPlan === p, '#16a34a')}
+                >
+                  {p}
+                </button>
+              ))}
+              <button type="button" onClick={() => refreshNext(djPlan)} style={navBtnStyle(false, '#374151')}>
+                Refresh
+              </button>
+            </div>
+          </div>
+          <p style={{ color: '#9ca3af', fontSize: 13, marginTop: 10 }}>
+            Plan <strong>{djPlan}</strong>. Load suggestion to the other deck (Deck {otherDeck === 1 ? 'A' : 'B'}).
+          </p>
+          <div style={{ marginTop: 16 }}>
+            {nextPicks.length === 0 && (
+              <p style={{ color: '#9ca3af' }}>No suggestions yet. Analyze a library and hit Refresh.</p>
+            )}
+            {nextPicks.map((pick, idx) => (
+              <div
+                key={pick.id ?? idx}
+                style={{
+                  padding: 12, marginBottom: 8, backgroundColor: '#1f2937',
+                  border: '1px solid #374151', borderRadius: 8,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                  <div>
+                    <strong>#{idx + 1} {pick.filename}</strong>
+                    <div style={{ fontSize: 12, color: '#9ca3af', marginTop: 4 }}>
+                      {pick.bpm != null ? `${Number(pick.bpm).toFixed(1)} BPM` : '-- BPM'}
+                      {' · '}Key {pick.key || '--'}
+                      {pick.camelot ? ` · ${pick.camelot}` : ''}
+                      {pick.energy != null ? ` · E ${Number(pick.energy).toFixed(2)}` : ''}
+                    </div>
+                    <div style={{ fontSize: 13, color: '#d1d5db', marginTop: 6 }}>{pick.reason}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => loadOtherDeck(pick.id)}
+                    style={navBtnStyle(false, '#2563eb')}
+                  >
+                    Load to other deck
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div style={cardStyle}>
@@ -285,14 +422,12 @@ function DJControls({ state, tracks, refresh }) {
         <div style={cardStyle}>
           <h2 style={headerStyle}>rekordbox MIDI map</h2>
           <p style={{ color: '#9ca3af', fontSize: 13, lineHeight: 1.5 }}>
-            This app does not install inside Pioneer DJ software. It creates a virtual MIDI port named <strong>AI_DJ_Virtual_Port</strong>. In rekordbox, open MIDI settings, enable that device, then MIDI-learn:
+            Virtual port <strong>AI_DJ_Virtual_Port</strong>. Deck A = MIDI ch 1, Deck B = ch 2. Full table: docs/rekordbox-mapping.md.
           </p>
           <ul style={{ color: '#d1d5db', fontSize: 13, lineHeight: 1.7 }}>
-            <li>CC 10 — Deck A play/pause</li>
-            <li>CC 11 — Deck B play/pause</li>
-            <li>CC 12 — Crossfader</li>
-            <li>CC 20–22 — Deck A EQ low/mid/hi</li>
-            <li>CC 23–25 — Deck B EQ low/mid/hi</li>
+            <li>CC 10 play · 11 cue · 13 sync · 14 load</li>
+            <li>CC 15 volume · 16 filter · 20–22 EQ</li>
+            <li>CC 30/31 browse · CC 12 crossfader (ch 1)</li>
           </ul>
         </div>
       </div>

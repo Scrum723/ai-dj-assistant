@@ -23,8 +23,20 @@ export default function App() {
   const [target, setTarget] = useState(null);
   const [mood, setMood] = useState('listening');
   const [state, setState] = useState(null);
+  const [highlight, setHighlight] = useState(null);
+  const [nextShow, setNextShow] = useState(null);
   const lastSpeakId = useRef(0);
   const audioRef = useRef(null);
+  const highlightTimer = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API}/shows/next`)
+      .then((r) => r.json())
+      .then((d) => { if (!cancelled) setNextShow(d?.next || null); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const finish = () => {
     setIsSpeaking(false);
@@ -74,7 +86,19 @@ export default function App() {
       ws = new WebSocket(WS_URL);
       ws.onmessage = (event) => {
         const msg = JSON.parse(event.data);
-        if (msg.type === 'state') setState(msg.payload);
+        if (msg.type === 'state') {
+          setState(msg.payload);
+          if (msg.payload?.highlight) {
+            setHighlight(msg.payload.highlight);
+            if (highlightTimer.current) clearTimeout(highlightTimer.current);
+            highlightTimer.current = setTimeout(() => setHighlight(null), 8000);
+          }
+        }
+        if (msg.type === 'highlight' && msg.payload) {
+          setHighlight(msg.payload);
+          if (highlightTimer.current) clearTimeout(highlightTimer.current);
+          highlightTimer.current = setTimeout(() => setHighlight(null), 8000);
+        }
         if (msg.type === 'speak' && msg.text && msg.id !== lastSpeakId.current) {
           lastSpeakId.current = msg.id;
           speak(msg.text, msg.target, msg.mood, msg.audio_url);
@@ -106,6 +130,9 @@ export default function App() {
   const liveMood = isSpeaking ? (mood || 'speaking') : (agent.dj_mode ? 'quiet' : (agent.mood || 'listening'));
   const distraction = (state?.settings?.environment?.distraction ?? 30) / 100;
   const haloName = agent.name || 'Halo';
+  const live = agent.live !== false && !agent.waiting_room;
+  const streams = state?.settings?.streams || {};
+  const streamEntries = Object.entries(streams).filter(([, url]) => String(url || '').trim());
 
   return (
     <div style={{
@@ -134,6 +161,7 @@ export default function App() {
         <div style={{ overflow: 'hidden', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 8 }}>
           {chat.slice(-10).map((line, i) => (
             <div key={`${line.ts}-${i}`} style={{ fontSize: 15, lineHeight: 1.35 }}>
+              <BadgeText platform={line.platform} />
               <span style={{ color: line.author === haloName ? '#c4b5fd' : '#6ee7b7', fontWeight: 700 }}>
                 {line.author}
               </span>
@@ -220,6 +248,60 @@ export default function App() {
         }}>
           {track ? `NOW PLAYING · ${shortTitle(track.filename)} · ${Number(track.bpm || 0).toFixed(0)} BPM` : 'Waiting on a track from the booth'}
         </div>
+
+        {!live && nextShow && (
+          <div style={{
+            marginTop: 16,
+            padding: '12px 20px',
+            background: 'rgba(76,29,149,0.85)',
+            borderRadius: 14,
+            border: '1px solid #a78bfa',
+            textAlign: 'center',
+            maxWidth: '90%',
+          }}>
+            <div style={{ fontSize: 11, letterSpacing: 1.4, fontWeight: 800, color: '#c4b5fd' }}>NEXT LIVE</div>
+            <div style={{ fontSize: 18, fontWeight: 800, marginTop: 4 }}>{nextShow.title || 'Live set'}</div>
+            <div style={{ fontSize: 13, color: '#e0e7ff', marginTop: 4 }}>
+              {nextShow.start_iso ? new Date(nextShow.start_iso).toLocaleString() : ''}
+            </div>
+            {streamEntries.length > 0 && (
+              <div style={{ marginTop: 8, fontSize: 12, color: '#d1d5db' }}>
+                {streamEntries.map(([k]) => k).join(' · ')}
+              </div>
+            )}
+          </div>
+        )}
+
+        <AnimatePresence>
+          {highlight && (
+            <motion.div
+              key={`hl-${highlight.ts}-${highlight.author}`}
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -10 }}
+              style={{
+                marginTop: 18,
+                padding: '14px 22px',
+                background: 'linear-gradient(135deg, rgba(124,58,237,0.92), rgba(219,39,119,0.88))',
+                borderRadius: 16,
+                border: '2px solid #f9a8d4',
+                maxWidth: '90%',
+                textAlign: 'center',
+                boxShadow: '0 0 28px rgba(219,39,119,0.45)',
+              }}
+            >
+              <div style={{ fontSize: 11, letterSpacing: 1.6, fontWeight: 800, opacity: 0.9 }}>
+                SUPPORTER · {(highlight.platform || '').toUpperCase()} · {(highlight.kind || 'gift').replace('_', ' ').toUpperCase()}
+              </div>
+              <div style={{ fontSize: '1.35rem', fontWeight: 800, marginTop: 6 }}>
+                {highlight.author}
+              </div>
+              {highlight.thank_you && (
+                <div style={{ fontSize: 15, marginTop: 8, opacity: 0.95 }}>{highlight.thank_you}</div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -239,5 +321,34 @@ function Chip({ children, color }) {
     }}>
       {children}
     </span>
+  );
+}
+
+const BADGE_LABEL = {
+  youtube: 'YT',
+  twitch: 'TW',
+  kick: 'KK',
+  tiktok: 'TT',
+  x: 'X',
+  facebook: 'FB',
+  rumble: 'RB',
+  room: 'ROOM',
+  halo: 'HALO',
+};
+
+function BadgeText({ platform }) {
+  if (!platform) return null;
+  const label = BADGE_LABEL[platform] || String(platform).slice(0, 3).toUpperCase();
+  return (
+    <span style={{
+      marginRight: 6,
+      padding: '1px 5px',
+      borderRadius: 4,
+      fontSize: 10,
+      fontWeight: 800,
+      letterSpacing: 0.5,
+      background: 'rgba(255,255,255,0.18)',
+      color: '#e5e7eb',
+    }}>{label}</span>
   );
 }

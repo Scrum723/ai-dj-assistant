@@ -8,11 +8,20 @@ export function wsUrl() {
   return `${proto}://${host}/ws`;
 }
 
-export async function api(path, options) {
+export async function api(path, options = {}) {
+  const operatorKey =
+    (typeof localStorage !== 'undefined' &&
+      (localStorage.getItem('operatorKey') || localStorage.getItem('OPERATOR_KEY'))) ||
+    '';
+  const headers = {
+    'Content-Type': 'application/json',
+    ...(operatorKey ? { 'X-Operator-Key': operatorKey } : {}),
+    ...(options.headers || {}),
+  };
   const res = await fetch(`${API}${path}`, {
     credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
     ...options,
+    headers,
   });
   if (!res.ok) throw new Error(`${path} failed (${res.status})`);
   return res.json();

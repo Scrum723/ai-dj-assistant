@@ -1,0 +1,13 @@
+{
+  "type": "gift",
+  "id": "tt-g1",
+  "gift_name": "Rose",
+  "repeat_count": 3,
+  "diamond_count": 3,
+  "user": {
+    "uniqueId": "gifter",
+    "nickname": "Gifter",
+    "userId": "9002"
+  },
+  "ts": 1710000002
+}

@@ -17,6 +17,7 @@ VOICE_DIR = APP_DIR / "voice"
 DEFAULTS = {
     "halo": {
         "name": "Halo",
+        "persona_preset": "hype",
         "persona": (
             "You are Halo, the LLM DJ buddy inside DJ Bot Botty "
             "(Charles Clottin / A Geostrophic Flow). Socialize with chat: greet by name, "
@@ -28,7 +29,35 @@ DEFAULTS = {
         "elevenlabs_key": "",
         "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
         "dj_mode": False,
+        "dj_mode_silent": False,
         "listen_mic": False,
+        "live": True,
+        "min_reply_sec": 8,
+        "max_replies_per_min": 6,
+        "user_cooldown_sec": 20,
+        "task_ttl_sec": 120,
+        "priorities": {
+            "operator": 0,
+            "safety": 1,
+            "supporter": 2,
+            "request": 3,
+            "mention": 4,
+            "first_timer": 5,
+            "regular": 6,
+            "idle": 9,
+        },
+        "schedule": "",
+        "next_show": "",
+        "last_set": "",
+        "operator_handles": ["charles", "charlesclottin"],
+        "say_amounts": False,
+        "thanks": {
+            "youtube": "Thank you {name} on YouTube{amount_bit} — the booth feels that!",
+            "twitch": "Huge thanks {name} from Twitch{amount_bit} — appreciate the support!",
+            "kick": "Thanks {name}!",
+            "tiktok": "Thanks {name}!",
+            "default": "Thank you {name} for the support!",
+        },
         "capabilities": {
             "greet": True,
             "requests": True,
@@ -38,6 +67,13 @@ DEFAULTS = {
             "introduce_fans": True,
             "midi": False,
         },
+        "segments": [
+            {"name": "roll_call", "every_min": 45, "enabled": True, "dj_mode_ok": True},
+            {"name": "request_hour", "at_minute": 0, "enabled": True, "dj_mode_ok": False},
+            {"name": "guess_the_bpm", "every_min": 30, "enabled": True, "dj_mode_ok": False},
+            {"name": "track_id", "enabled": True, "dj_mode_ok": True},
+            {"name": "last_call", "at_minute": 55, "enabled": True, "dj_mode_ok": False},
+        ],
     },
     "environment": {
         "vibe": "night",
@@ -57,12 +93,94 @@ DEFAULTS = {
     "demo": False,
     "youtube_id": "",
     "autonomy": 70,
+    "dj": {
+        "automation": False,
+        "manual_takeover": False,
+        "takeover_minutes": 5,
+        "midi_in_port": "",
+        "plan": "build",
+        "recency_n": 8,
+        "weights": {
+            "bpm_fit": 1.0,
+            "camelot_fit": 1.0,
+            "energy_fit": 1.0,
+            "recency": 1.0,
+            "request_bonus": 1.5,
+        },
+    },
+    "shows": [],  # [{start_iso, title}, ...]
+    "moderation": {
+        "blocklist": [],
+    },
     "streams": {
         "youtube": "https://www.youtube.com/@theweathermandj/live",
         "x": "https://x.com/charlesclottin",
         "facebook": "https://www.facebook.com/Charles.clottin",
         "tiktok": "https://www.tiktok.com/@charlesclottin/live",
         "rumble": "https://rumble.com/c/charlesclottin",
+    },
+    "community": {
+        "name": "",
+        "in_jokes": [],
+        "retention_days": 30,
+        "push_bans": False,
+        "relay": {
+            "twitch": {"halo": False, "room": False, "max_per_min": 10},
+            "youtube_official": {"halo": False, "room": False, "max_per_min": 6},
+            "kick": {"halo": False, "room": False, "max_per_min": 10},
+            "facebook": {"halo": False, "room": False, "max_per_min": 10},
+        },
+        "adapters": {
+            "youtube": {"enabled": False, "channel": ""},
+            "twitch": {
+                "enabled": False,
+                "channel": "",
+                "bot_token": "",
+                "bot_nick": "",
+            },
+            "kick": {
+                "enabled": False,
+                "channel": "",
+                "access_token": "",
+                "broadcaster_user_id": None,
+            },
+            "facebook": {
+                "enabled": False,
+                "live_video_id": "",
+                "channel": "",
+                "page_access_token": "",
+                "poll_interval_sec": 3,
+            },
+            "rumble": {
+                "enabled": False,
+                "api_url": "",
+                "channel": "",
+                "poll_interval_sec": 3,
+            },
+            "youtube_official": {
+                "enabled": False,
+                "channel": "",
+                "live_chat_id": "",
+                "api_key": "",
+                "oauth_token": "",
+                "daily_quota": 10000,
+            },
+            "tiktok": {
+                "enabled": False,
+                "username": "",
+                "channel": "",
+                "experimental": True,
+            },
+            "x": {
+                "enabled": False,
+                "post_id": "",
+                "channel": "",
+                "bearer_token": "",
+                "can_post": False,
+                "poll_interval_sec": 15,
+                "experimental": True,
+            },
+        },
     },
 }
 
@@ -108,9 +226,30 @@ def save(patch: dict) -> dict:
     return merged
 
 
+_SECRET_ADAPTER_KEYS = (
+    "access_token",
+    "page_access_token",
+    "api_key",
+    "api_url",  # Rumble URL embeds livestream key
+    "bearer_token",  # X API
+    "bot_token",  # Twitch IRC chat:edit
+    "oauth_token",  # YouTube liveChatMessages.insert
+)
+
+
 def public_settings(data: dict | None = None) -> dict:
     data = copy.deepcopy(data if data is not None else load())
     key = data.get("halo", {}).get("elevenlabs_key") or ""
     data["halo"]["elevenlabs_key_set"] = bool(key)
     data["halo"]["elevenlabs_key"] = ""
+    adapters = ((data.get("community") or {}).get("adapters") or {})
+    if isinstance(adapters, dict):
+        for _name, acfg in adapters.items():
+            if not isinstance(acfg, dict):
+                continue
+            for sk in _SECRET_ADAPTER_KEYS:
+                if sk in acfg:
+                    present = bool(acfg.get(sk))
+                    acfg[f"{sk}_set"] = present
+                    acfg[sk] = ""
     return data

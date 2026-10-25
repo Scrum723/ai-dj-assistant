@@ -1,0 +1,28 @@
+{
+  "data": [
+    {
+      "id": "1800000000000000001",
+      "text": "loving this set",
+      "author_id": "111",
+      "created_at": "2024-06-01T12:00:00.000Z",
+      "conversation_id": "1800000000000000000"
+    },
+    {
+      "id": "1800000000000000002",
+      "text": "play Mad World",
+      "author_id": "222",
+      "created_at": "2024-06-01T12:01:00.000Z",
+      "conversation_id": "1800000000000000000"
+    }
+  ],
+  "includes": {
+    "users": [
+      { "id": "111", "username": "kim_x", "name": "Kim" },
+      { "id": "222", "username": "raj_x", "name": "Raj" }
+    ]
+  },
+  "meta": {
+    "newest_id": "1800000000000000002",
+    "result_count": 2
+  }
+}

@@ -17,4 +17,6 @@ RUN npm install --prefix frontend-dashboard \
      fi
 ENV PORT=8080
 EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/healthz' % (__import__('os').environ.get('PORT','8080'))).read()" || exit 1
 CMD ["python", "backend/main.py"]

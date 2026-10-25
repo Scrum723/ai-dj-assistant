@@ -17,3 +17,5 @@ cmds = [
 
 [start]
 cmd = "python backend/main.py"
+
+# Railway: set health check path to /healthz (ok without MIDI/mido)

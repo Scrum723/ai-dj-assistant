@@ -106,6 +106,77 @@ Halo starts with the app. The overlay is her face: she greets people, answers ch
 
 `GEMINI_API_KEY` in `~/.env` makes replies generative. Without it, Halo still talks using local lines.
 
+### Halo LLM / memory env vars
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `HALO_PROVIDER` | `gemini` | LLM backend: `gemini` or `xai` (alias `grok`) |
+| `GEMINI_API_KEY` | — | Required when `HALO_PROVIDER=gemini` for generative replies |
+| `GEMINI_MODEL` | `gemini-3.6-flash` | Gemini model id |
+| `XAI_API_KEY` | — | Required when `HALO_PROVIDER=xai` |
+| `XAI_MODEL` | `grok-2-latest` | xAI model id |
+| `HALO_COST_PER_1K` | `0.0001` | Estimated USD per 1k tokens for `/metrics` |
+| `HALO_DAILY_CALL_CAP` | unset | When set, Halo uses fallbacks after this many LLM calls/day |
+| `DATA_DIR` | `backend/` | Directory for `halo.db`, `community.db`, `users.db`, `library.db`; daily copies under `$DATA_DIR/backups/YYYY-MM-DD/` |
+| `OPERATOR_KEY` | unset | Shared secret for booth control. Send as header `X-Operator-Key`. Required in cloud; when unset, `127.0.0.1` may call `/action/*`, `POST /settings`, `/agent/*`, `/sentinel/*` without a key. Dashboard reads the key from `localStorage.operatorKey`. |
+| `YOUTUBE_LIVE_VIDEO_ID` | unset | Optional default YouTube live id (adapters still off until enabled in settings) |
+| `ELEVENLABS_API_KEY` | unset | Optional TTS; falls through to macOS `say` / browser speech |
+| `COOKIE_SECURE` | — | Set `true` on Railway / HTTPS (also auto when `RAILWAY_ENVIRONMENT` is set) |
+| `CORS_ORIGINS` | localhost + djbotbotty.com | Comma-separated browser origins |
+| `TRUSTED_PROXY` | unset | Set `1` to honor `X-Forwarded-For` (auto on Railway). Without it, XFF is ignored so clients cannot spoof localhost for operator auth. |
+| `LOG_FORMAT` | plain / `json` on Railway | Structured JSON logs with `request_id` |
+| `SENTRY_DSN` | unset | Optional Sentry error reporting |
+| `X_BEARER_TOKEN` | unset | Optional X API bearer for experimental replies adapter |
+| `X_POST_ID` | unset | Optional root post id for X replies polling |
+| `RUMBLE_LIVESTREAM_API_URL` | unset | Rumble livestream API URL (embeds key) |
+| `FACEBOOK_PAGE_ACCESS_TOKEN` | unset | Facebook Page token for Live comments |
+
+### Railway / djbotbotty.com
+
+- Health check path: **`/healthz`** — returns `{ok, midi, llm, adapters}`. Always HTTP 200; `midi` is `false` on cloud (no mido). Point Railway health at `/healthz`.
+- Mount a volume at `DATA_DIR` for SQLite DBs. On boot the app copies DBs once per UTC day into `$DATA_DIR/backups/YYYY-MM-DD/` (see note below).
+- Set `OPERATOR_KEY`, `COOKIE_SECURE=true` (or rely on `RAILWAY_ENVIRONMENT`), and an LLM key (`GEMINI_API_KEY` or `XAI_API_KEY`).
+- Optional: `CORS_ORIGINS`, `SENTRY_DSN`, `LOG_FORMAT=json`.
+- IP rate limits apply to `/chat`, `/request`, `/auth/*`, and `/ws/room` connects.
+- Show schedule: `settings.shows` as `[{start_iso, title}]`; room/overlay show **Next live** via `GET /shows/next`.
+
+#### DATA_DIR backups
+
+Boot runs `ops.maybe_daily_backup()`: if `$DATA_DIR/backups/<UTC-day>/.done` is missing, it copies `halo.db`, `community.db`, `users.db`, `identity.db`, `library.db`, and jsonl logs into that folder. For off-box retention, sync `$DATA_DIR/backups/` with Railway volume snapshots or an external job — the app does not upload backups itself.
+
+#### Rollback
+
+1. In Railway → service → **Deployments**, open the last known-good deploy → **Rollback** (or redeploy the previous Git SHA on `main`).
+2. Confirm health: `GET https://djbotbotty.com/healthz` returns `ok: true`.
+3. If a bad migration corrupted SQLite, stop the service, restore files from `$DATA_DIR/backups/<day>/` over the live DB paths, then restart.
+4. Keep `OPERATOR_KEY` / OAuth secrets unchanged across rollbacks unless the deploy that set them is the one you are undoing.
+5. Document the rollback time and SHA in `PROGRESS.md` Notes when you practice it (Alpha checklist: test once).
+
+Switch providers with `HALO_PROVIDER` only — no code change. Viewer memory persists in `$DATA_DIR/halo.db`; room history in `$DATA_DIR/community.db`. Full template: `.env.example`. Alpha ops checklist: `docs/alpha-checklist.md`.
+
+### Platform reality
+
+How chat is read today (adapters stay **off** until enabled in Settings):
+
+| Platform | Read chat | Send | Notes |
+|----------|-----------|------|-------|
+| YouTube (pytchat) | Unofficial (pytchat) | No | Default YT path; no quota |
+| YouTube official | Data API `liveChatMessages` | Later (quota) | Daily quota guard; falls back to pytchat |
+| Twitch | Anonymous IRC | Later (bot token) | Read-only justinfan |
+| Kick | Events webhooks | If access token | Signature-verified |
+| Facebook Live | Graph API comments | Later (Page) | Needs Page token + live video id |
+| Rumble | Livestream API JSON poll | No | Read-only |
+| TikTok LIVE | **Experimental** unofficial webcast (`TikTokLive` optional) | No | Off by default; terms risk; auto-disable 5 fails / 10 min |
+| X | **Experimental** replies/quotes to a post | Only if `can_post` | No live-chat API; needs bearer + post id |
+
+Experimental adapters show a warning in Settings when enabled and auto-disable after 5 failures in 10 minutes (operator alert on `/community/status` and room).
+
+**Local run (this PC):** use `.venv\Scripts\python.exe` and `python -m pytest -q` from the repo root. Cloud boot uses `requirements-cloud.txt` (no MIDI / no librosa).
+
+### Moderation / kill switch
+
+Halo drops blocked words, links, caps/char floods, and rate-limited spam before they reach the LLM or TTS. Operator chat commands (from `halo.operator_handles` or the dashboard): `!mute <name>`, `!unmute <name>`, `!halo quiet`, `!halo on`. `POST /sentinel/kill-ours` freezes speech and `/action/*` (returns `{"status":"killed"}`); `POST /sentinel/resume` clears it.
+
 Forward chat from another bot (Twitch bridge, etc.):
 
 ```bash

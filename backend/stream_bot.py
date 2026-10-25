@@ -1,11 +1,14 @@
-"""Optional YouTube/chat forwarder. Prefer the in-process Halo co-host in main.py."""
+"""Optional YouTube/chat forwarder into the community Aggregator via POST /chat.
+
+Prefer enabling community.adapters.youtube in settings (in-process pytchat adapter).
+This script remains for terminal demo input or an external forwarder process.
+"""
 
 import logging
 import os
 import sys
 import time
 
-import pytchat
 import requests
 from dotenv import load_dotenv
 
@@ -18,11 +21,20 @@ load_dotenv()
 BRAIN_URL = os.getenv("AI_DJ_BRAIN_URL", "http://127.0.0.1:8000")
 
 
+def _headers() -> dict:
+    """Send X-Operator-Key when OPERATOR_KEY is set (cloud /agent/youtube, etc.)."""
+    key = (os.getenv("OPERATOR_KEY") or "").strip()
+    if key:
+        return {"X-Operator-Key": key}
+    return {}
+
+
 def forward(author, message, platform="youtube"):
     try:
         requests.post(
             f"{BRAIN_URL}/chat",
             json={"author": author, "message": message, "platform": platform},
+            headers=_headers(),
             timeout=5,
         )
     except Exception as e:
@@ -32,9 +44,19 @@ def forward(author, message, platform="youtube"):
 if __name__ == "__main__":
     video_id = sys.argv[1] if len(sys.argv) > 1 else None
     if video_id:
-        requests.post(f"{BRAIN_URL}/agent/youtube", json={"video_id": video_id}, timeout=5)
+        requests.post(
+            f"{BRAIN_URL}/agent/youtube",
+            json={"video_id": video_id},
+            headers=_headers(),
+            timeout=5,
+        )
+        try:
+            import pytchat
+        except Exception as e:
+            logger.error("pytchat missing: %s — enable community.adapters.youtube instead", e)
+            sys.exit(1)
         chat = pytchat.create(video_id=video_id)
-        logger.info("Forwarding YouTube chat %s to Halo", video_id)
+        logger.info("Forwarding YouTube chat %s to Aggregator via /chat", video_id)
         while chat.is_alive():
             for c in chat.get().sync_items():
                 forward(c.author.name, c.message, "youtube")
@@ -50,6 +72,6 @@ if __name__ == "__main__":
                     author, message = line.split(":", 1)
                 else:
                     author, message = "You", line
-                forward(author.strip(), message.strip(), "terminal")
+                forward(author.strip(), message.strip(), "room")
         except (KeyboardInterrupt, EOFError):
             print("\nBye.")

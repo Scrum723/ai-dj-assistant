@@ -11,8 +11,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
+
+from auth import require_operator
 
 logger = logging.getLogger(__name__)
 LOG = Path(__file__).resolve().parent / "sentinel_incidents.jsonl"
@@ -43,6 +45,11 @@ def is_killed() -> bool:
     return _kill
 
 
+def set_killed(value: bool) -> None:
+    global _kill
+    _kill = bool(value)
+
+
 @router.get("/admin")
 @router.get("/wp-login.php")
 @router.get("/.env")
@@ -52,9 +59,18 @@ async def honeypot(request: Request):
 
 
 @router.post("/sentinel/kill-ours")
-async def kill_ours(request: Request):
+async def kill_ours(request: Request, _auth: None = Depends(require_operator)):
     """Operator-only: freeze THIS process's autonomous talk. Never targets a remote host."""
     global _kill
     record("kill_ours", request)
     _kill = True
-    return JSONResponse({"ok": True, "scope": "local_process_only"})
+    return JSONResponse({"ok": True, "scope": "local_process_only", "killed": True})
+
+
+@router.post("/sentinel/resume")
+async def resume(request: Request, _auth: None = Depends(require_operator)):
+    """Operator-only: clear the local kill switch so Halo and /action/* work again."""
+    global _kill
+    record("resume", request)
+    _kill = False
+    return JSONResponse({"ok": True, "scope": "local_process_only", "killed": False})

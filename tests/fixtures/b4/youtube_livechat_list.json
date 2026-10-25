@@ -1,0 +1,63 @@
+{
+  "kind": "youtube#liveChatMessageListResponse",
+  "etag": "etag",
+  "nextPageToken": "CAUQAA",
+  "pollingIntervalMillis": 5000,
+  "pageInfo": {
+    "totalResults": 2,
+    "resultsPerPage": 2
+  },
+  "items": [
+    {
+      "kind": "youtube#liveChatMessage",
+      "etag": "e1",
+      "id": "LCC.ytmsg1",
+      "snippet": {
+        "type": "textMessageEvent",
+        "liveChatId": "livechat123",
+        "authorChannelId": "UCauthor1",
+        "publishedAt": "2025-01-14T16:08:06Z",
+        "hasDisplayContent": true,
+        "displayMessage": "Hello from official API",
+        "textMessageDetails": {
+          "messageText": "Hello from official API"
+        }
+      },
+      "authorDetails": {
+        "channelId": "UCauthor1",
+        "displayName": "YtFan",
+        "profileImageUrl": "https://example.com/a.jpg",
+        "isChatModerator": false,
+        "isChatOwner": false,
+        "isChatSponsor": false
+      }
+    },
+    {
+      "kind": "youtube#liveChatMessage",
+      "etag": "e2",
+      "id": "LCC.ytmsg2",
+      "snippet": {
+        "type": "superChatEvent",
+        "liveChatId": "livechat123",
+        "authorChannelId": "UCauthor2",
+        "publishedAt": "2025-01-14T16:09:06Z",
+        "hasDisplayContent": true,
+        "displayMessage": "Kim Super Chatted $5.00",
+        "superChatDetails": {
+          "amountMicros": "5000000",
+          "currency": "USD",
+          "amountDisplayString": "$5.00",
+          "userComment": "Love the set",
+          "tier": 2
+        }
+      },
+      "authorDetails": {
+        "channelId": "UCauthor2",
+        "displayName": "Kim",
+        "isChatModerator": false,
+        "isChatOwner": false,
+        "isChatSponsor": true
+      }
+    }
+  ]
+}
