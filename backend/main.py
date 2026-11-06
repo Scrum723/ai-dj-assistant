@@ -784,6 +784,7 @@ async def lifespan(app: FastAPI):
             library_db=DB_PATH,
         )
         nowplaying_svc.on_track_change(publish_nowplaying)
+        nowplaying_svc.on_track_change(agent.on_track_change)
         nowplaying_task = asyncio.create_task(nowplaying_svc.run_poll_loop())
     except Exception:
         logger.exception("nowplaying service failed to start")
@@ -1518,6 +1519,15 @@ def _nowplaying_state() -> dict:
 def get_nowplaying():
     """Public current track JSON (compatible with visualizer js/nowplaying.js norm())."""
     return _nowplaying_state()
+
+
+@app.get("/api/nowplaying/history")
+@app.get("/nowplaying/history")
+def get_nowplaying_history():
+    """Last 20 played tracks (memory + $DATA_DIR/nowplaying.jsonl)."""
+    if not nowplaying_svc:
+        return {"tracks": []}
+    return {"tracks": nowplaying_svc.history(20)}
 
 
 @app.post("/api/nowplaying")

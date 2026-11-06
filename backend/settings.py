@@ -52,6 +52,7 @@ DEFAULTS = {
             "supporter": 2,
             "request": 3,
             "mention": 4,
+            "track_id": 4,
             "first_timer": 5,
             "regular": 6,
             "idle": 9,
@@ -61,6 +62,10 @@ DEFAULTS = {
         "last_set": "",
         "operator_handles": ["charles", "charlesclottin"],
         "say_amounts": False,
+        # V3 track announcements (also exposed under public_settings["chief"])
+        "announce_tracks": True,
+        "announce_min_gap_sec": 90,
+        "announce_tts": False,
         "thanks": {
             "youtube": "Thank you {name} on YouTube{amount_bit} — the booth feels that!",
             "twitch": "Huge thanks {name} from Twitch{amount_bit} — appreciate the support!",

@@ -34,6 +34,7 @@ import os
 import sqlite3
 import time
 import urllib.request
+from collections import deque
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -43,11 +44,22 @@ DEFAULT_SOURCES = ["internal", "wnp", "file"]
 DEFAULT_WNP_URL = "http://127.0.0.1:8899/v1/last"
 DEFAULT_POLL_SEC = 2.0
 DEFAULT_DEBOUNCE_SEC = 3.0
+HISTORY_MAX = 20
 
 TrackDict = dict[str, Any]
 GetTrackFn = Callable[[], Optional[dict]]
 OnChangeFn = Callable[[TrackDict], None]
 ClockFn = Callable[[], float]
+
+
+def _history_path() -> Path:
+    raw = os.getenv("DATA_DIR")
+    base = Path(raw) if raw else Path(__file__).resolve().parent
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return base / "nowplaying.jsonl"
 
 
 def _cloud() -> bool:
@@ -231,6 +243,8 @@ class NowPlaying:
         self._manual: Optional[TrackDict] = None
         self._listeners: list[OnChangeFn] = []
         self._stop = False
+        self._history: deque[TrackDict] = deque(maxlen=HISTORY_MAX)
+        self._load_history()
 
     # --- config helpers -------------------------------------------------
 
@@ -275,6 +289,49 @@ class NowPlaying:
 
     def current(self) -> Optional[TrackDict]:
         return None if not self._current else dict(self._current)
+
+    def history(self, limit: int = HISTORY_MAX) -> list[TrackDict]:
+        """Last N committed tracks (newest last)."""
+        n = max(1, min(int(limit or HISTORY_MAX), HISTORY_MAX))
+        items = list(self._history)
+        return [dict(x) for x in items[-n:]]
+
+    def _load_history(self) -> None:
+        path = _history_path()
+        if not path.is_file():
+            return
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            loaded: list[TrackDict] = []
+            for line in lines[-HISTORY_MAX:]:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(row, dict) and (row.get("title") or row.get("artist")):
+                    loaded.append(row)
+            self._history.clear()
+            for row in loaded[-HISTORY_MAX:]:
+                self._history.append(row)
+        except Exception:
+            logger.debug("nowplaying history load failed", exc_info=True)
+
+    def _append_history(self, track: TrackDict) -> None:
+        if not track or track.get("unavailable"):
+            return
+        if not (track.get("title") or track.get("artist")):
+            return
+        entry = {k: v for k, v in track.items() if k != "unavailable"}
+        self._history.append(dict(entry))
+        try:
+            path = _history_path()
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            logger.debug("nowplaying history append failed", exc_info=True)
 
     def set_manual(self, raw: Any) -> Optional[TrackDict]:
         n = norm(raw, source="manual")
@@ -510,6 +567,7 @@ class NowPlaying:
         self._current = track
         self._pending = None
         self._pending_since = None
+        self._append_history(track)
         for fn in list(self._listeners):
             try:
                 fn(dict(track))

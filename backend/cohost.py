@@ -104,6 +104,19 @@ HYPE_RE = re.compile(
     re.I,
 )
 MENTION_RE = re.compile(r"\b(halo|chief|dj|nova|doc weather|geostrophic)\b", re.I)
+TRACK_ID_RE = re.compile(
+    r"(?:^!(?:song|track|id)\b)"
+    r"|(?:\bwhat(?:'s| is|s)\s+(?:this\s+)?song\b)"
+    r"|(?:\bwhat\s+song\s+is\s+this\b)"
+    r"|(?:\bwhat(?:'s| is|s)\s+playing\b)"
+    r"|(?:\btrack\s*id\b)"
+    r"|(?:\bsong\s+name\b)"
+    r"|(?:\bnow\s+playing\b)",
+    re.I,
+)
+TRACK_CHANGE_SKIP_SEC = 20.0
+ANNOUNCE_CANNED = "Now playing: {title} — {artist}"
+NO_TRACK_LINE = "Not sure yet, I'll ask the DJ"
 
 WELCOME_LINES = [
     "{name} just walked in — welcome to the booth!",
@@ -175,6 +188,7 @@ DEMO_FANS = [
 # Reply selection priority (lower = sooner). mentions > requests > first-time > questions > rest
 _REPLY_PRIORITY = {
     "mention": 0,
+    "track_id": 0,
     "request": 1,
     "welcome": 2,
     "new_viewer": 2,
@@ -277,6 +291,12 @@ class CohostAgent:
         self._segments = SegmentScheduler(clock=lambda: self._clock())
         self._last_in_joke_at = 0.0
         self._last_track_title: Optional[str] = None
+        self._current_np: Optional[dict] = None
+        self._last_track_change_at: float = 0.0
+        self._last_announce_at: float = 0.0
+        self._pending_track_announce: Optional[dict] = None
+        self._announce_count = 0
+        self._track_id_answers = 0
         self._inbox: asyncio.Queue = asyncio.Queue()
         self._pending: list[dict] = []
         self._last_reply_at = 0.0
@@ -394,6 +414,39 @@ class CohostAgent:
 
     def set_record_supporter_hook(self, hook: Optional[Callable[[dict], None]]) -> None:
         self._record_supporter = hook
+
+    def on_track_change(self, track: dict) -> None:
+        """Subscribe target for nowplaying track_change — rate-limit then queue announce."""
+        track = dict(track or {})
+        if track.get("unavailable") or not (track.get("title") or track.get("artist")):
+            if not track:
+                self._current_np = None
+            return
+        now = self._clock()
+        prev_change = self._last_track_change_at
+        self._last_track_change_at = now
+        self._current_np = dict(track)
+        title = (track.get("title") or "").strip()
+        if title:
+            self._last_track_title = title
+
+        halo = self._cfg().get("halo") or {}
+        if not bool(halo.get("announce_tracks", True)):
+            return
+        if is_killed() or self.quiet:
+            return
+        if halo.get("dj_mode") or halo.get("dj_mode_silent"):
+            return
+        # Hard skip: two changes within 20s → ignore the later one
+        if prev_change and (now - prev_change) < TRACK_CHANGE_SKIP_SEC:
+            return
+        try:
+            gap = float(halo.get("announce_min_gap_sec") if halo.get("announce_min_gap_sec") is not None else 90)
+        except (TypeError, ValueError):
+            gap = 90.0
+        if self._last_announce_at and (now - self._last_announce_at) < gap:
+            return
+        self._pending_track_announce = dict(track)
 
     def _burst_key(self, author: str, platform: str) -> str:
         return f"{(platform or 'chat').strip().lower()}:{(author or '').strip().lower()}"
@@ -588,6 +641,8 @@ class CohostAgent:
             return "supporter"
         if classified == "request":
             return "request"
+        if classified == "track_id":
+            return "track_id"
         if classified == "mention":
             return "mention"
         if classified in {"welcome", "new_viewer"}:
@@ -809,7 +864,7 @@ class CohostAgent:
         return key in self._operator_handles(platform)
 
     def _is_dj_priority(self, item: dict) -> bool:
-        """Mentions, requests, and operator — the only talkers in DJ quiet mode."""
+        """Mentions, requests, track_id, and operator — the only talkers in DJ quiet mode."""
         author = item.get("author") or ""
         platform = item.get("platform") or "chat"
         if self._is_operator(author, platform):
@@ -817,10 +872,10 @@ class CohostAgent:
         kind = item.get("_kind") or self._classify(
             author, item.get("message") or "", platform=platform
         )
-        return kind in {"mention", "request"}
+        return kind in {"mention", "request", "track_id"}
 
     def _queue_task_dj_ok(self, task) -> bool:
-        if task.kind in {"operator", "safety", "supporter", "request", "mention"}:
+        if task.kind in {"operator", "safety", "supporter", "request", "mention", "track_id"}:
             return True
         return self._is_dj_priority(self._item_from_task(task))
 
@@ -833,6 +888,7 @@ class CohostAgent:
         kind_map = {
             "request": "request",
             "mention": "mention",
+            "track_id": "track_id",
             "first_timer": "welcome",
             "operator": "mention",
             "safety": "mention",
@@ -1044,22 +1100,11 @@ class CohostAgent:
         try:
             snap = self.get_snapshot() or {}
             track = snap.get("current_track") or {}
-            title = self._short_title(track.get("filename") or "")
-            bpm = track.get("bpm")
+            np = self._nowplaying_track()
+            title = (np.get("title") or "").strip() or self._short_title(track.get("filename") or "")
+            bpm = np.get("bpm") if np.get("bpm") is not None else track.get("bpm")
         except Exception:
             logger.exception("snapshot for segments failed")
-
-        pending_track_id = None
-        if title and title != self._last_track_title:
-            prev = self._last_track_title
-            self._last_track_title = title
-            if prev is not None and not self.quiet and not dj_silent:
-                pending_track_id = self._segments.on_transition(
-                    self._segment_configs(),
-                    title=title,
-                    dj_mode=dj_mode,
-                    now=now,
-                )
 
         min_sec = self._min_reply_sec()
         due = self._last_reply_at <= 0 or (now - self._last_reply_at) >= min_sec
@@ -1080,16 +1125,18 @@ class CohostAgent:
                 return True
             if self._is_operator(task.target, task.platform):
                 return False
-            if task.kind in {"operator", "safety", "supporter"}:
+            if task.kind in {"operator", "safety", "supporter", "track_id"}:
                 return False
             last = self._last_reply_user.get(task.target.lower(), 0.0)
             return (now - last) < self._user_cooldown_sec(task.kind)
 
         replied = False
-        if pending_track_id is not None:
-            self._say(pending_track_id.line, mood="talk")
-            self._last_reply_at = now
-            self._reply_times.append(now)
+        if self._pending_track_announce is not None and not self.quiet and not dj_silent and not dj_mode:
+            pending = self._pending_track_announce
+            self._pending_track_announce = None
+            await self._announce_track(pending, energy=energy)
+            self._last_reply_at = self._clock()
+            self._reply_times.append(self._last_reply_at)
             replied = True
         elif not self.quiet and not dj_silent and due and budget_ok:
             task = self.queue.pop(now=now, skip_user=_skip_task)
@@ -1251,12 +1298,19 @@ class CohostAgent:
         is_op = self._is_operator(author, platform)
         event_kind = (item.get("event_kind") or "").strip().lower()
         is_supporter = bool(item.get("_supporter")) or event_kind in SUPPORT_KINDS or event_kind == "supporter"
-        # DJ quiet: only mentions, requests, operator, supporters
-        if dj_mode and not is_op and not is_supporter and kind not in {"mention", "request"}:
+        # DJ quiet: only mentions, requests, track_id, operator, supporters
+        if dj_mode and not is_op and not is_supporter and kind not in {"mention", "request", "track_id"}:
             return
         max_sent = 3 if is_op else (1 if dj_mode else 2)
 
         demo = platform == "demo"
+        if kind == "track_id":
+            line = self._format_track_id_line()
+            self._track_id_answers += 1
+            self._say(line, target=author, mood="talk")
+            self._last_reply_user[author.lower()] = self._clock()
+            return
+
         if is_supporter:
             fallback = self._thanks_line(item)
             use_ai = (not demo) and energy != "eco"
@@ -1368,7 +1422,7 @@ class CohostAgent:
             "supporter",
         }:
             should = True
-        elif kind in {"welcome", "question", "mention", "new_viewer", "returning", "milestone"}:
+        elif kind in {"welcome", "question", "mention", "track_id", "new_viewer", "returning", "milestone"}:
             should = True
         elif kind == "hype":
             should = autonomy >= 35
@@ -1489,6 +1543,52 @@ class CohostAgent:
     def _greet_key(self, author: str, platform: str = "chat", profile_id: Any = None) -> str:
         return GreetingShowState.key(platform or "chat", author, profile_id)
 
+    def _nowplaying_track(self) -> dict:
+        """Prefer subscribed nowplaying state; fall back to booth snapshot."""
+        if self._current_np and (self._current_np.get("title") or self._current_np.get("artist")):
+            return dict(self._current_np)
+        try:
+            snap = self.get_snapshot() or {}
+            cur = snap.get("nowplaying") or snap.get("current_track") or {}
+            if isinstance(cur, dict) and (cur.get("title") or cur.get("artist") or cur.get("filename")):
+                if cur.get("title") or cur.get("artist"):
+                    return dict(cur)
+                # internal deck shape uses filename
+                return {
+                    "title": self._short_title(cur.get("filename") or ""),
+                    "artist": cur.get("artist"),
+                    "bpm": cur.get("bpm"),
+                    "key": cur.get("key"),
+                }
+        except Exception:
+            logger.exception("nowplaying snapshot read failed")
+        return {}
+
+    def _format_track_id_line(self, track: Optional[dict] = None) -> str:
+        track = track if track is not None else self._nowplaying_track()
+        title = (track.get("title") or "").strip() if track else ""
+        artist = (track.get("artist") or "").strip() if track else ""
+        if not title and not artist:
+            return NO_TRACK_LINE
+        if not title:
+            title = "Unknown title"
+        if not artist:
+            artist = "Unknown artist"
+        bits = [f"{title} — {artist}"]
+        bpm = track.get("bpm") if track else None
+        key = (track.get("key") or "").strip() if track else ""
+        extras: list[str] = []
+        if bpm is not None:
+            try:
+                extras.append(f"{float(bpm):g} BPM")
+            except (TypeError, ValueError):
+                pass
+        if key:
+            extras.append(str(key))
+        if extras:
+            bits.append(f"({', '.join(extras)})")
+        return " ".join(bits)
+
     def _classify(
         self,
         author: str,
@@ -1500,6 +1600,8 @@ class CohostAgent:
     ) -> str:
         if REQUEST_RE.search(message) or message.lower().startswith("!request"):
             return "request"
+        if TRACK_ID_RE.search(message or ""):
+            return "track_id"
         if QUESTION_RE.search(message):
             return "question"
         if MENTION_RE.search(message):
@@ -1694,7 +1796,56 @@ class CohostAgent:
                 self._ai_backoff_until = time.time() + 75
         return capped_fallback
 
-    def _say(self, text: str, target: Optional[str] = None, mood: str = "talk"):
+    async def _announce_track(self, track: dict, *, energy: str = "balanced") -> None:
+        """Room/chat announce for a track_change (optional TTS + optional LLM flourish)."""
+        if is_killed() or self.quiet:
+            return
+        halo = self._cfg().get("halo") or {}
+        if not bool(halo.get("announce_tracks", True)):
+            return
+        if halo.get("dj_mode") or halo.get("dj_mode_silent"):
+            return
+        title = (track.get("title") or "").strip() or "Unknown title"
+        artist = (track.get("artist") or "").strip() or "Unknown artist"
+        canned = ANNOUNCE_CANNED.format(title=title, artist=artist)
+        # Keep segment status in sync with real now-playing
+        try:
+            self._segments.on_transition(
+                self._segment_configs(),
+                title=title,
+                artist=artist,
+                bpm=track.get("bpm"),
+                key=track.get("key"),
+                dj_mode=False,
+                now=self._clock(),
+            )
+        except Exception:
+            logger.exception("track_id segment on_transition failed")
+
+        line = canned
+        use_ai = energy != "eco"
+        if use_ai:
+            hint = (
+                "Announce the new track in one short spoken sentence. "
+                f"Start from or include: {canned}. Light hype only."
+            )
+            line = await self._compose(
+                "booth",
+                f"now playing {title} by {artist}",
+                fallback=canned,
+                hint=hint,
+                platform="halo",
+                max_sentences=1,
+                timeout_sec=4.0,
+            )
+            if not (line or "").strip():
+                line = canned
+        announce_tts = bool(halo.get("announce_tts", False))
+        self._say(line, mood="talk", tts=announce_tts)
+        self._last_announce_at = self._clock()
+        self._announce_count += 1
+
+    def _say(self, text: str, target: Optional[str] = None, mood: str = "talk", *, tts: bool = True):
         if is_killed():
             return
         text = (text or "").strip()
@@ -1709,7 +1860,8 @@ class CohostAgent:
         self.mood = "speaking"
         self.last_target = target
         self.replies += 1
-        self.speak(text, target=target, mood=mood)
+        if tts:
+            self.speak(text, target=target, mood=mood)
         name = self._halo_name()
         self.chat.append(
             {

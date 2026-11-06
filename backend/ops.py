@@ -151,6 +151,7 @@ def sqlite_paths() -> list[Path]:
         "halo_training.jsonl",
         "dj_actions.jsonl",
         "sentinel_incidents.jsonl",
+        "nowplaying.jsonl",
     )
     return [base / n for n in names]
 
