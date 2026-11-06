@@ -2,7 +2,7 @@
 
 **Branch:** `feature/chief-visualizer` (worktree `C:\Users\cclot\ai-dj-assistant\.worktrees\chief-visualizer`)  
 **Base:** `origin/main` @ `c902a73`  
-**Status:** All phases R0–R5 and V0–V7 implemented. Pushed to GitHub; PR to `main`.
+**Status:** Merged to `main` (PRs #2–#5). Local Windows booth running with Gemini.
 
 ## Phases done
 
@@ -44,12 +44,21 @@
 8. Live dashboard → visualizer control latency (&lt;200 ms)  
 9. Mac: `start.py` / `make_app.sh` → Chief.app
 
+## Gemini (live)
+
+- `CHIEF_PROVIDER=gemini`, `GEMINI_MODEL=gemini-3.6-flash`
+- `GEMINI_API_KEY` in user `~/.env` (not committed)
+- `GOOGLE_CLOUD_PROJECT=352688721186` (optional; not OAuth)
+- Code floors Gemini output tokens at 512 + `thinking_budget=0` so 3.x models return visible text
+- Details: `docs/gemini-setup.md`
+
 ## Deviations
 
 - No visualizer-v3 on disk → vendored v2; added SSE+poll `js/nowplaying.js` in V2  
 - Internal keys/DBs stay `halo*`; user-facing name is Chief  
 - Halo relay message format `Name: text` kept after R3  
-- Windows PC install uses `DJ_BACKEND=sim` (MIDI stays on Mac)
+- Windows PC install uses `DJ_BACKEND=sim` (MIDI stays on Mac)  
+- Social OAuth Client IDs not set yet — email booth pass works (`docs/oauth-setup.md`)
 
 ## How to run locally (Windows)
 
