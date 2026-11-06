@@ -4,6 +4,7 @@ import { api, wsUrl } from './api.js';
 import Settings from './Settings.jsx';
 import Room from './Room.jsx';
 import Profile from './Profile.jsx';
+import Visualizer from './Visualizer.jsx';
 import StreamLinks, { openAllStreams } from './StreamLinks.jsx';
 
 const VIBES = {
@@ -99,6 +100,7 @@ export default function App() {
           <button onClick={() => setActiveTab('room')} style={navBtnStyle(activeTab === 'room', '#10b981')}>Room</button>
           <button onClick={() => setActiveTab('fan')} style={navBtnStyle(activeTab === 'fan', '#059669')}>Requests</button>
           <button onClick={() => setActiveTab('profile')} style={navBtnStyle(activeTab === 'profile', '#a78bfa')}>Profile</button>
+          <button onClick={() => setActiveTab('visualizer')} style={navBtnStyle(activeTab === 'visualizer', '#38bdf8')}>Visualizer</button>
           <button onClick={() => setActiveTab('settings')} style={navBtnStyle(activeTab === 'settings', '#6366f1')}>Settings</button>
         </div>
       </nav>
@@ -110,6 +112,7 @@ export default function App() {
         {activeTab === 'room' && <Room state={state} refresh={refresh} />}
         {activeTab === 'fan' && <FanHub refresh={refresh} />}
         {activeTab === 'profile' && <Profile onBack={() => setActiveTab('dj')} />}
+        {activeTab === 'visualizer' && <Visualizer />}
         {activeTab === 'settings' && <Settings state={state} refresh={refresh} />}
       </div>
     </div>

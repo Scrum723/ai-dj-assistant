@@ -206,6 +206,10 @@ DEFAULTS = {
         "poll_sec": 2.0,
         "debounce_sec": 3.0,
     },
+    # Overlay (V5): lower-third now-playing; default off to avoid doubling the visualizer card
+    "overlay": {
+        "show_nowplaying": False,
+    },
 }
 
 

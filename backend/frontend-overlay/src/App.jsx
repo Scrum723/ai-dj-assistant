@@ -25,9 +25,11 @@ export default function App() {
   const [state, setState] = useState(null);
   const [highlight, setHighlight] = useState(null);
   const [nextShow, setNextShow] = useState(null);
+  const [nowPlaying, setNowPlaying] = useState(null);
   const lastSpeakId = useRef(0);
   const audioRef = useRef(null);
   const highlightTimer = useRef(null);
+  const npHideTimer = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +101,17 @@ export default function App() {
           if (highlightTimer.current) clearTimeout(highlightTimer.current);
           highlightTimer.current = setTimeout(() => setHighlight(null), 8000);
         }
+        if (msg.type === 'nowplaying') {
+          const payload = msg.payload || msg;
+          const track = payload?.track || payload;
+          if (track && (track.title || track.artist || track.filename)) {
+            setNowPlaying(track);
+            if (npHideTimer.current) clearTimeout(npHideTimer.current);
+            npHideTimer.current = setTimeout(() => setNowPlaying(null), 12000);
+          } else {
+            setNowPlaying(null);
+          }
+        }
         if (msg.type === 'speak' && msg.text && msg.id !== lastSpeakId.current) {
           lastSpeakId.current = msg.id;
           speak(msg.text, msg.target, msg.mood, msg.audio_url);
@@ -124,7 +137,6 @@ export default function App() {
 
   const agent = state?.agent || {};
   const chat = agent.chat || state?.chat || [];
-  const track = state?.current_track;
   const vibe = agent.vibe || state?.settings?.environment?.vibe || 'night';
   const glow = VIBE_GLOW[vibe] || '#7c3aed';
   const liveMood = isSpeaking ? (mood || 'speaking') : (agent.dj_mode ? 'quiet' : (agent.mood || 'listening'));
@@ -133,6 +145,16 @@ export default function App() {
   const live = agent.live !== false && !agent.waiting_room;
   const streams = state?.settings?.streams || {};
   const streamEntries = Object.entries(streams).filter(([, url]) => String(url || '').trim());
+  const showNowPlaying = !!(state?.settings?.overlay?.show_nowplaying);
+  const npTrack = nowPlaying || (showNowPlaying ? state?.current_track : null);
+  const npLabel = npTrack
+    ? (npTrack.title || shortTitle(npTrack.filename) || 'Untitled')
+    : '';
+  const npArtist = npTrack?.artist || '';
+  const npMeta = [
+    npTrack?.bpm != null ? `${Number(npTrack.bpm).toFixed(0)} BPM` : null,
+    npTrack?.key || null,
+  ].filter(Boolean).join(' · ');
 
   return (
     <div style={{
@@ -144,7 +166,8 @@ export default function App() {
       boxSizing: 'border-box',
       background: 'transparent',
       fontFamily: 'system-ui, sans-serif',
-      color: 'white'
+      color: 'white',
+      position: 'relative',
     }}>
       <div style={{
         background: 'rgba(0,0,0,0.55)',
@@ -237,18 +260,6 @@ export default function App() {
           </motion.div>
         </AnimatePresence>
 
-        <div style={{
-          marginTop: 22,
-          padding: '10px 18px',
-          background: 'rgba(0,0,0,0.6)',
-          borderRadius: 999,
-          fontSize: 14,
-          color: '#d1d5db',
-          border: '1px solid #374151'
-        }}>
-          {track ? `NOW PLAYING · ${shortTitle(track.filename)} · ${Number(track.bpm || 0).toFixed(0)} BPM` : 'Waiting on a track from the booth'}
-        </div>
-
         {!live && nextShow && (
           <div style={{
             marginTop: 16,
@@ -303,6 +314,52 @@ export default function App() {
           )}
         </AnimatePresence>
       </div>
+
+      <AnimatePresence>
+        {showNowPlaying && npTrack && (npLabel || npArtist) && (
+          <motion.div
+            key={`np-${npLabel}-${npArtist}`}
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            style={{
+              position: 'absolute',
+              left: 28,
+              right: 28,
+              bottom: 28,
+              margin: '0 auto',
+              maxWidth: 720,
+              padding: '14px 22px',
+              background: 'rgba(0,0,0,0.82)',
+              borderRadius: 14,
+              border: `1px solid ${glow}`,
+              boxShadow: `0 0 24px ${glow}55`,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 16,
+              pointerEvents: 'none',
+            }}
+          >
+            <div style={{
+              fontSize: 11,
+              letterSpacing: 1.6,
+              fontWeight: 800,
+              color: glow,
+              whiteSpace: 'nowrap',
+            }}>
+              NOW PLAYING
+            </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {npLabel}
+              </div>
+              <div style={{ fontSize: 13, color: '#d1d5db', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {[npArtist, npMeta].filter(Boolean).join(' · ') || '—'}
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

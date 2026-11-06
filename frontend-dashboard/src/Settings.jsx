@@ -182,6 +182,48 @@ export default function Settings({ state, refresh }) {
             {label}
           </label>
         ))}
+        <h3 style={{ ...h, fontSize: 16, marginTop: 18 }}>Track announcements</h3>
+        <p style={{ color: '#9ca3af', fontSize: 12, marginTop: 0 }}>
+          When Now Playing changes, {halo.name || 'Chief'} can announce in chat (rate-limited; respects DJ mode).
+        </p>
+        <label style={{ display: 'flex', gap: 8, margin: '8px 0', color: '#e5e7eb' }}>
+          <input
+            type="checkbox"
+            checked={halo.announce_tracks !== false}
+            onChange={(e) => setHalo({ announce_tracks: e.target.checked })}
+          />
+          Announce track changes
+        </label>
+        <label style={lab}>Min gap between announces (sec)
+          <input
+            type="number"
+            min={20}
+            max={600}
+            value={halo.announce_min_gap_sec ?? 90}
+            onChange={(e) => setHalo({ announce_min_gap_sec: Number(e.target.value) || 90 })}
+            style={inp}
+          />
+        </label>
+        <label style={{ display: 'flex', gap: 8, margin: '8px 0', color: '#e5e7eb' }}>
+          <input
+            type="checkbox"
+            checked={!!halo.announce_tts}
+            onChange={(e) => setHalo({ announce_tts: e.target.checked })}
+          />
+          Speak track announces (TTS)
+        </label>
+        <h3 style={{ ...h, fontSize: 16, marginTop: 18 }}>Overlay</h3>
+        <label style={{ display: 'flex', gap: 8, margin: '8px 0', color: '#e5e7eb' }}>
+          <input
+            type="checkbox"
+            checked={!!(form.overlay || {}).show_nowplaying}
+            onChange={(e) => setForm({
+              ...form,
+              overlay: { ...(form.overlay || {}), show_nowplaying: e.target.checked },
+            })}
+          />
+          Show Now Playing lower-third (default off — use visualizer card instead)
+        </label>
       </section>
 
       <section style={card}>
