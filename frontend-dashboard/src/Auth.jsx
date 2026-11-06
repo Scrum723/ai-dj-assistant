@@ -128,14 +128,7 @@ function SignupForm({ onBack, onDone }) {
       <input required minLength={8} type="password" placeholder="Password (8+)" value={password} onChange={(e) => setPassword(e.target.value)} style={inp} />
       {err && <p style={{ color: '#fca5a5' }}>{typeof err === 'string' ? err : JSON.stringify(err)}</p>}
       <button type="submit" style={primary}>Create pass</button>
-      <div style={{ marginTop: 18, color: '#9ca3af', fontSize: 13 }}>Or continue with</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
-        {SOCIAL.map((p) => (
-          <a key={p.id} href={`${API}/auth/${p.id}/start`} style={social}>
-            {p.label}{ready[p.id] ? '' : ' · set keys'}
-          </a>
-        ))}
-      </div>
+      <SocialButtons ready={ready} />
     </form>
   );
 }
@@ -144,6 +137,10 @@ function LoginForm({ onBack, onDone }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [err, setErr] = useState('');
+  const [ready, setReady] = useState({});
+  useEffect(() => {
+    fetch(`${API}/auth/providers`).then((r) => r.json()).then((d) => setReady(d.providers || {})).catch(() => {});
+  }, []);
   const submit = async (e) => {
     e.preventDefault();
     const res = await fetch(`${API}/auth/login`, {
@@ -167,7 +164,39 @@ function LoginForm({ onBack, onDone }) {
       <input required type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} style={inp} />
       {err && <p style={{ color: '#fca5a5' }}>{typeof err === 'string' ? err : JSON.stringify(err)}</p>}
       <button type="submit" style={primary}>Enter booth</button>
+      <SocialButtons ready={ready} />
     </form>
+  );
+}
+
+function SocialButtons({ ready }) {
+  const anyReady = SOCIAL.some((p) => ready[p.id]);
+  return (
+    <>
+      <div style={{ marginTop: 18, color: '#9ca3af', fontSize: 13 }}>Or continue with</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8 }}>
+        {SOCIAL.map((p) => (
+          ready[p.id] ? (
+            <a key={p.id} href={`${API}/auth/${p.id}/start`} style={social}>
+              {p.label}
+            </a>
+          ) : (
+            <span
+              key={p.id}
+              title={`${p.label} OAuth Client ID/Secret not set in ~/.env yet`}
+              style={{ ...social, opacity: 0.45, cursor: 'not-allowed' }}
+            >
+              {p.label} · coming soon
+            </span>
+          )
+        ))}
+      </div>
+      {!anyReady ? (
+        <p style={{ color: '#9ca3af', fontSize: 12, margin: '8px 0 0' }}>
+          Social login needs OAuth apps (Google/Facebook/Apple/TikTok). Email pass works now — wire social keys in ~/.env later. See docs/oauth-setup.md.
+        </p>
+      ) : null}
+    </>
   );
 }
 
