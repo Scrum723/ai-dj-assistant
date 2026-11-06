@@ -82,6 +82,7 @@ def main():
     print("  Room      ", f"{booth}?tab=room")
     print("  Room short", f"http://127.0.0.1:{PORT}/room")
     print("  Overlay   ", overlay)
+    print("  Visualizer", f"http://127.0.0.1:{PORT}/visualizer/")
     print("Phones on this Wi-Fi can open the Room URL shown in the Room tab.")
     print("Closing the window does NOT stop Chief. Press Ctrl+C here to quit.")
     open_window(booth)

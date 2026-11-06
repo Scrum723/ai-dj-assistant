@@ -36,6 +36,7 @@ open Chief.app
 - Booth: `http://127.0.0.1:8000/booth/`
 - Viewer room: `http://127.0.0.1:8000/booth/?tab=room`
 - OBS overlay: `http://127.0.0.1:8000/overlay/`
+- Visualizer: `http://127.0.0.1:8000/visualizer/`
 - **Chief live / DJ MODE** in the top bar: DJ mode keeps Chief quiet so you can mix.
 - Settings: voice (macOS free, or ElevenLabs if you paste a key), persona, what Chief may do, vibe, distraction, eco/balanced/show.
 
@@ -204,8 +205,19 @@ Add a **Browser** source: `http://127.0.0.1:5174`
 Width 1920, height 1080, **Shutdown source when not visible** off.  
 The page is transparent. Press `s` or `t` in that window to test the mouth/TTS.
 
+## Visualizer & Now Playing
+
+Served by the backend at `http://127.0.0.1:8000/visualizer/` (no separate `python3 -m http.server`; that path is legacy).
+
+- **Live input (recommended):** open `http://127.0.0.1:8000/visualizer/` in **Chrome**, pick the **DJ controller / audio interface** in the input dropdown → *Use input* → allow the mic. No BlackHole needed. (BlackHole + Multi-Output remains an optional alternative.) `getUserMedia` works because `127.0.0.1` is a secure context. A LAN IP like `http://192.168.x.x:8000` is **not** a secure context, so the mic will not work there — always use `127.0.0.1` for live input.
+- **OBS:** for live audio, use **Window Capture** (macOS Screen Capture → the Chrome window; press **F** fullscreen, **H** hide UI). A **Browser Source** at `http://127.0.0.1:8000/visualizer/?ui=0` (1920×1080) works for remote-controlled visuals, but OBS's browser source generally cannot open audio inputs, so it only reacts to demo/file audio. (Live check on Charles's OBS version: blocked.)
+- **Restream Studio:** share the Chrome window/tab (Restream → Share screen → Chrome tab "Storm Cellar"). Tick "share tab audio" only if you want the visualizer's demo audio (usually off; the music comes from the mixer).
+
+Now Playing sources and env vars: see `NOWPLAYING_*` in the env table above. Dashboard **Visualizer** tab controls scenes/reactivity and shows current track.
+
 ## URLs
 
 - Dashboard: http://127.0.0.1:5173
 - Overlay: http://127.0.0.1:5174
 - API: http://127.0.0.1:8000
+- Visualizer: http://127.0.0.1:8000/visualizer/
