@@ -923,8 +923,19 @@ class DjModeRequest(BaseModel):
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DASH_DIST = os.path.join(ROOT_DIR, "frontend-dashboard", "dist")
 OVER_DIST = os.path.join(ROOT_DIR, "frontend-overlay", "dist")
+VIS_DIR = os.path.join(os.path.dirname(__file__), "visualizer")
 if not os.path.isdir(OVER_DIST):
     OVER_DIST = os.path.join(ROOT_DIR, "backend", "frontend-overlay", "dist")
+
+
+class _NoStoreIndexStaticFiles(StaticFiles):
+    """Serve static files; never cache index.html so visualizer updates show up."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if path in ("", "index.html") or getattr(resp, "media_type", None) == "text/html":
+            resp.headers["Cache-Control"] = "no-store"
+        return resp
 
 
 @app.get("/room")
@@ -1797,6 +1808,12 @@ if os.path.isdir(DASH_DIST):
     app.mount("/booth", StaticFiles(directory=DASH_DIST, html=True), name="booth")
 if os.path.isdir(OVER_DIST):
     app.mount("/overlay", StaticFiles(directory=OVER_DIST, html=True), name="overlay")
+if os.path.isdir(VIS_DIR):
+    app.mount(
+        "/visualizer",
+        _NoStoreIndexStaticFiles(directory=VIS_DIR, html=True),
+        name="visualizer",
+    )
 
 
 if __name__ == "__main__":
