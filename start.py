@@ -23,6 +23,7 @@ def main():
     os.chdir(ROOT)
     if not VENV_PY.exists():
         run([sys.executable, "-m", "venv", str(ROOT / ".venv")])
+    # Prefer requirements-local.txt when present (local/desktop deps); else requirements.txt.
     req = ROOT / "requirements-local.txt"
     if not req.exists():
         req = ROOT / "requirements.txt"
@@ -30,10 +31,13 @@ def main():
     npm = shutil.which("npm")
     if not npm:
         raise SystemExit("npm not found. Install Node.js, then re-run.")
+    overlay = ROOT / "frontend-overlay"
+    if not overlay.exists():
+        overlay = ROOT / "backend" / "frontend-overlay"
     run([npm, "install"], cwd=ROOT / "frontend-dashboard")
     run([npm, "run", "build"], cwd=ROOT / "frontend-dashboard")
-    run([npm, "install"], cwd=ROOT / "frontend-overlay")
-    run([npm, "run", "build"], cwd=ROOT / "frontend-overlay")
+    run([npm, "install"], cwd=overlay)
+    run([npm, "run", "build"], cwd=overlay)
     os.execv(str(VENV_PY), [str(VENV_PY), str(ROOT / "desktop.py")])
 
 

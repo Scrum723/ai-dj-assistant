@@ -6,8 +6,13 @@ MACOS="$APP/Contents/MacOS"
 RES="$APP/Contents/Resources"
 
 echo "Building frontends..."
+if [ -d "$ROOT/frontend-overlay" ]; then
+  OVERLAY="$ROOT/frontend-overlay"
+else
+  OVERLAY="$ROOT/backend/frontend-overlay"
+fi
 (cd "$ROOT/frontend-dashboard" && npm install && npm run build)
-(cd "$ROOT/frontend-overlay" && npm install && npm run build)
+(cd "$OVERLAY" && npm install && npm run build)
 
 echo "Ensuring Python venv..."
 if [ ! -x "$ROOT/.venv/bin/python" ]; then
