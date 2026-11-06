@@ -6,16 +6,18 @@ cmds = [
   "python -m ensurepip --upgrade || true",
   "pip install -r requirements-cloud.txt",
   "npm install --prefix frontend-dashboard",
-  "npm install --prefix frontend-overlay",
+  "npm install --prefix backend/frontend-overlay",
 ]
 
 [phases.build]
 cmds = [
   "npm run build --prefix frontend-dashboard",
-  "npm run build --prefix frontend-overlay",
+  "npm run build --prefix backend/frontend-overlay",
 ]
 
 [start]
 cmd = "python backend/main.py"
 
 # Railway: set health check path to /healthz (ok without MIDI/mido)
+# Cloud: DJ_BACKEND=sim, CHIEF_PROVIDER=gemini, GEMINI_API_KEY, OPERATOR_KEY, DATA_DIR volume
+# Overlay lives under backend/frontend-overlay (same as Dockerfile)
