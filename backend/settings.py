@@ -1,4 +1,4 @@
-"""Persistent Halo / booth settings. Lives in Application Support, not the repo."""
+"""Persistent Chief (formerly Halo) / booth settings. Lives in Application Support, not the repo."""
 
 from __future__ import annotations
 
@@ -295,3 +295,10 @@ def public_settings(data: dict | None = None) -> dict:
     # Alias for clients migrating off the `halo` settings key.
     data["chief"] = copy.deepcopy(data.get("halo") or {})
     return data
+
+
+def cohost_name(settings: dict | None = None) -> str:
+    """Configured co-host display name for user-facing strings (default Chief)."""
+    data = settings if isinstance(settings, dict) else load()
+    name = ((data.get("halo") or {}).get("name") or "").strip()
+    return name or "Chief"

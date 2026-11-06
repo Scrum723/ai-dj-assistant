@@ -1,4 +1,4 @@
-"""Per-viewer memory for Halo — SQLite keyed by platform+handle."""
+"""Per-viewer memory for Chief (formerly Halo) — SQLite keyed by platform+handle."""
 
 from __future__ import annotations
 

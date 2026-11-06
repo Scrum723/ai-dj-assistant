@@ -50,7 +50,8 @@ def test_persona_preset_hype_chill_host(agent, fake_llm):
     )
     assert fake_llm.calls
     system = fake_llm.calls[-1][0]
-    assert system == PERSONA_PRESETS["chill"]
+    name = agent._halo_name()
+    assert system == PERSONA_PRESETS["chill"].format(name=name)
 
     fake_llm.calls.clear()
     agent._last_gemini = 0.0
@@ -64,7 +65,7 @@ def test_persona_preset_hype_chill_host(agent, fake_llm):
             platform="chat",
         )
     )
-    assert fake_llm.calls[-1][0] == PERSONA_PRESETS["host"]
+    assert fake_llm.calls[-1][0] == PERSONA_PRESETS["host"].format(name=name)
 
 
 def test_persona_custom_and_live_without_restart(agent, fake_llm):
@@ -95,7 +96,7 @@ def test_persona_custom_and_live_without_restart(agent, fake_llm):
             platform="chat",
         )
     )
-    assert fake_llm.calls[-1][0] == PERSONA_PRESETS["hype"]
+    assert fake_llm.calls[-1][0] == PERSONA_PRESETS["hype"].format(name=agent._halo_name())
 
 
 def test_dj_mode_answers_mention_silent_otherwise(agent, spoken):

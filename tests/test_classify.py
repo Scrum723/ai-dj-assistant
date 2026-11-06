@@ -1,4 +1,4 @@
-"""Classify and request-parsing cases for Halo."""
+"""Classify and request-parsing cases for Chief (formerly Halo)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import pytest
         ("what BPM is this?", "question"),
         ("where you streaming from?", "question"),
         ("hey halo what's up", "mention"),
+        ("hey chief what's up", "mention"),
         ("yo dj", "mention"),
         ("this slaps", "hype"),
         ("fire drop", "hype"),

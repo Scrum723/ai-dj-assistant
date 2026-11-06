@@ -1,4 +1,4 @@
-"""Recurring Halo segments: roll call, request hour, guess BPM, track ID, last call."""
+"""Recurring Chief (formerly Halo) segments: roll call, request hour, guess BPM, track ID, last call."""
 
 from __future__ import annotations
 

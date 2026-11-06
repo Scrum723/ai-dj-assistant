@@ -1,4 +1,4 @@
-"""Idle Halo trainer. Runs only when the room is quiet. Pulls back at Grok v3+."""
+"""Idle Chief (formerly Halo) trainer. Runs only when the room is quiet. Pulls back at Grok v3+."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ def _append(note: dict[str, Any]) -> None:
 
 
 async def idle_trainer(get_snapshot: Callable[[], dict[str, Any]], stop: asyncio.Event) -> None:
-    logger.info("Halo idle trainer armed (interval %ss).", training_interval_sec())
+    logger.info("Chief idle trainer armed (interval %ss).", training_interval_sec())
     while not stop.is_set():
         try:
             await asyncio.wait_for(stop.wait(), timeout=training_interval_sec())
@@ -56,4 +56,4 @@ async def idle_trainer(get_snapshot: Callable[[], dict[str, Any]], stop: asyncio
                 "interval_sec": training_interval_sec(),
             }
         )
-        logger.info("Halo idle note written (%s lines).", sum(1 for _ in NOTES.open()) if NOTES.exists() else 0)
+        logger.info("Chief idle note written (%s lines).", sum(1 for _ in NOTES.open()) if NOTES.exists() else 0)

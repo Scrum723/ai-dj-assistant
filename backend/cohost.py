@@ -1,4 +1,4 @@
-"""Halo — autonomous DJ co-host that socializes with the room and overlay."""
+"""Chief (formerly Halo) — autonomous DJ co-host that socializes with the room and overlay."""
 
 from __future__ import annotations
 
@@ -33,22 +33,25 @@ from memory import (
 from moderation import check_input, check_output, mute, unmute
 from segments import SegmentScheduler, merge_segment_config
 from sentinel import is_killed
+from settings import cohost_name
 
 load_dotenv(os.path.expanduser("~/.env"))
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-AGENT_NAME = "Halo"
+AGENT_NAME = "Chief"  # fallback; prefer cohost_name(settings)
 
 MUTE_RE = re.compile(r"^!mute\s+(\S+)\s*$", re.I)
 UNMUTE_RE = re.compile(r"^!unmute\s+(\S+)\s*$", re.I)
-HALO_QUIET_RE = re.compile(r"^!halo\s+quiet\s*$", re.I)
-HALO_ON_RE = re.compile(r"^!halo\s+on\s*$", re.I)
+HALO_QUIET_RE = re.compile(r"^!(?:halo|chief)\s+quiet\s*$", re.I)
+HALO_ON_RE = re.compile(r"^!(?:halo|chief)\s+on\s*$", re.I)
+CHIEF_QUIET_RE = HALO_QUIET_RE
+CHIEF_ON_RE = HALO_ON_RE
 DEFAULT_OPERATOR_HANDLES = ("charles", "charlesclottin")
 
 PERSONA = (
-    "You are Halo, the LLM DJ buddy inside DJ Bot Botty "
+    "You are {name}, the LLM DJ buddy inside DJ Bot Botty "
     "(Charles Clottin / A Geostrophic Flow). DJ Bot Botty is the full booth: MIDI, decks, room. You are the chat agent. "
     "Your job is to socialize with chat: greet people by name, hype the music, "
     "take song requests, answer short questions, shout out fans, and keep energy up. "
@@ -59,13 +62,13 @@ PERSONA = (
 PERSONA_PRESETS = {
     "hype": PERSONA,
     "chill": (
-        "You are Halo, the calm booth partner inside DJ Bot Botty "
+        "You are {name}, the calm booth partner inside DJ Bot Botty "
         "(Charles Clottin / A Geostrophic Flow). Keep the room warm and unhurried: "
         "greet softly, acknowledge requests, answer briefly. Low energy, no shouting. "
         "Reply in 1-2 spoken sentences. No hashtags, no URLs, no emojis, no 'as an AI'."
     ),
     "host": (
-        "You are Halo, the clear room host inside DJ Bot Botty "
+        "You are {name}, the clear room host inside DJ Bot Botty "
         "(Charles Clottin / A Geostrophic Flow). Introduce people, take requests, "
         "answer questions, and keep the booth organized. Professional and friendly. "
         "Reply in 1-2 spoken sentences. No hashtags, no URLs, no emojis, no 'as an AI'."
@@ -81,6 +84,7 @@ IGNORE_USERS = {
     "moobot",
     "fossabot",
     "halo",
+    "chief",
     "ai dj",
     "ai_dj",
 }
@@ -98,7 +102,7 @@ HYPE_RE = re.compile(
     r"\b(fire|slaps|banger|lets go|let's go|love this|w+|huge|drop|energy|hype|insane)\b",
     re.I,
 )
-MENTION_RE = re.compile(r"\b(halo|dj|nova|doc weather|geostrophic)\b", re.I)
+MENTION_RE = re.compile(r"\b(halo|chief|dj|nova|doc weather|geostrophic)\b", re.I)
 
 WELCOME_LINES = [
     "{name} just walked in — welcome to the booth!",
@@ -127,14 +131,14 @@ HYPE_LINES = [
     "Yes {name}! Keep that in the comments, the booth hears you.",
 ]
 IDLE_GENERIC = [
-    "Chat's live — drop a song name or just say hey. Halo's in the booth.",
+    "Chat's live — drop a song name or just say hey. {name}'s in the booth.",
     "If you're new here, welcome. Request a track and I'll try to queue it.",
     "Who's hanging in the stream right now? Call out your city.",
     "This set's for the night crowd. Tell me if you want it darker or brighter.",
     "Don't be shy in chat. I talk back.",
 ]
 IDLE_WAITING_ROOM = [
-    "Halo's holding the waiting room — Charles isn't live right now. Drop a request or say hey.",
+    "{name}'s holding the waiting room — Charles isn't live right now. Drop a request or say hey.",
     "Booth's quiet for now. Ask about the next show or leave a track for the crate.",
     "Waiting room mode: I still hear you. Requests and questions are welcome.",
     "Not live at the moment — hang out, request a song, or ask when the next set is.",
@@ -189,7 +193,7 @@ _PLATFORM_LABEL = {
     "facebook": "Facebook",
     "rumble": "Rumble",
     "room": "room",
-    "halo": "Halo",
+    "halo": "Chief",  # display label; platform key stays "halo"
     "chat": "chat",
     "demo": "demo",
     "dashboard": "the booth",
@@ -294,24 +298,29 @@ class CohostAgent:
         self.queue = PriorityQueue(clock=lambda: self._clock())
         self._sync_queue_config()
         if not self._llm.available:
-            logger.warning("Halo LLM unavailable — using local lines only.")
+            logger.warning("Chief LLM unavailable — using local lines only.")
 
     def _cfg(self) -> dict:
         return self.get_settings()
 
     def _halo_name(self) -> str:
-        return (self._cfg().get("halo") or {}).get("name") or AGENT_NAME
+        return cohost_name(self._cfg())
 
     def _persona(self) -> str:
         """Active system persona from preset or custom text (live settings, no restart)."""
         halo = self._cfg().get("halo") or {}
+        name = self._halo_name()
         preset = str(halo.get("persona_preset") or "hype").strip().lower()
         if preset not in PERSONA_PRESET_IDS:
             preset = "hype"
         if preset == "custom":
             custom = (halo.get("persona") or "").strip()
-            return custom or PERSONA
-        return PERSONA_PRESETS.get(preset) or PERSONA
+            return custom or PERSONA.format(name=name)
+        template = PERSONA_PRESETS.get(preset) or PERSONA
+        try:
+            return template.format(name=name)
+        except Exception:
+            return template
 
     def status(self) -> dict[str, Any]:
         cfg = self._cfg()
@@ -625,6 +634,8 @@ class CohostAgent:
 
     def _platform_label(self, platform: str) -> str:
         p = (platform or "chat").strip().lower() or "chat"
+        if p == "halo":
+            return self._halo_name()
         return _PLATFORM_LABEL.get(p, p)
 
     def _platform_phrase(self, platform: str) -> tuple[str, str]:
@@ -788,7 +799,7 @@ class CohostAgent:
         return set(DEFAULT_OPERATOR_HANDLES)
 
     def _is_operator(self, author: str, platform: str = "chat") -> bool:
-        # Dashboard "Talk to Halo" is the booth operator console
+        # Dashboard "Talk to Chief" is the booth operator console
         if (platform or "").strip().lower() == "dashboard":
             return True
         key = (author or "").strip().lower()
@@ -852,11 +863,11 @@ class CohostAgent:
             unmute(m.group(1))
             self._say(f"Unmuted {m.group(1)}.", mood="talk")
             return True
-        if HALO_QUIET_RE.match(text):
+        if HALO_QUIET_RE.match(text) or CHIEF_QUIET_RE.match(text):
             self.quiet = True
             self._say("Going quiet.", mood="talk")
             return True
-        if HALO_ON_RE.match(text):
+        if HALO_ON_RE.match(text) or CHIEF_ON_RE.match(text):
             self.quiet = False
             self._say("Back on.", mood="talk")
             return True
@@ -977,7 +988,7 @@ class CohostAgent:
             pass
 
     async def run(self):
-        logger.info("Halo co-host loop starting (demo=%s).", self.demo)
+        logger.info("Chief co-host loop starting (demo=%s).", self.demo)
         # YouTube chat is owned by community.adapters.youtube (Aggregator).
         await asyncio.sleep(1.2)
         if not self._intro_done:
@@ -995,7 +1006,7 @@ class CohostAgent:
             try:
                 await self._tick()
             except Exception:
-                logger.exception("Halo tick failed")
+                logger.exception("Chief tick failed")
             energy = (self._cfg().get("environment") or {}).get("energy_mode") or "balanced"
             await asyncio.sleep(0.55 if energy == "eco" else 0.3)
 
@@ -1425,8 +1436,9 @@ class CohostAgent:
         caps = caps or {}
         halo = self._cfg().get("halo") or {}
         waiting = self._waiting_room()
+        cname = self._halo_name()
         if waiting:
-            options = list(IDLE_WAITING_ROOM)
+            options = [line.format(name=cname) for line in IDLE_WAITING_ROOM]
             schedule = (halo.get("schedule") or "").strip()
             next_show = (halo.get("next_show") or "").strip()
             last_set = (halo.get("last_set") or "").strip()
@@ -1442,7 +1454,7 @@ class CohostAgent:
                 options.extend(FOLLOW_WAITING)
             self._say(random.choice(options), mood="idle")
             return
-        options = list(IDLE_GENERIC)
+        options = [line.format(name=cname) for line in IDLE_GENERIC]
         if caps.get("introduce_fans") and len(viewers) >= 2:
             a, b = random.sample(viewers, 2)
             options.append(f"{a}, meet {b} — both of you are in the booth tonight. Say hey.")
@@ -1672,11 +1684,11 @@ class CohostAgent:
                 return clip_sentences(cleaned, limit)
             return capped_fallback
         except asyncio.TimeoutError:
-            logger.info("Halo LLM thank-you timed out; using template")
+            logger.info("Chief LLM thank-you timed out; using template")
             return capped_fallback
         except Exception as e:
             err = str(e)
-            logger.error("Halo LLM reply failed: %s", e)
+            logger.error("Chief LLM reply failed: %s", e)
             if "429" in err or "RESOURCE_EXHAUSTED" in err:
                 self._ai_backoff_until = time.time() + 75
         return capped_fallback

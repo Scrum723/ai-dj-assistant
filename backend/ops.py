@@ -1,5 +1,7 @@
 """Alpha ops helpers: JSON logs, IP rate limits, sqlite backup, adapter-down watch."""
 
+# Chief (formerly Halo) — keep halo.db / halo_training.jsonl paths.
+
 from __future__ import annotations
 
 import json

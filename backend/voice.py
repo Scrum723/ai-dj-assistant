@@ -1,4 +1,4 @@
-"""Halo voice: macOS neural/say first, optional ElevenLabs, browser last."""
+"""Chief (formerly Halo) voice: macOS neural/say first, optional ElevenLabs, browser last."""
 
 from __future__ import annotations
 

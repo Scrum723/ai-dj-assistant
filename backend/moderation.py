@@ -1,4 +1,4 @@
-"""Input/output moderation for Halo chat and the future community room.
+"""Input/output moderation for Chief (formerly Halo) chat and the future community room.
 
 check_input accepts either (author, message) or a ChatMessage-like dict
 with author/message or user.handle + text.

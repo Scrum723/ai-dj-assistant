@@ -1,4 +1,6 @@
-"""Priority queue for Halo replies — operator > safety > supporter > … > idle."""
+"""Priority queue for Chief (formerly Halo) replies — operator > safety > supporter > … > idle."""
+
+# Chief (formerly Halo) — keep HaloTask / internal ids.
 
 from __future__ import annotations
 
