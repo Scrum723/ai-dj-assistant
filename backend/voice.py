@@ -102,11 +102,19 @@ def elevenlabs_tts(text: str, api_key: str, voice_id: str) -> Path | None:
 
 def synthesize(text: str) -> str | None:
     """Return a /voice/<file> URL or None to let the overlay use browser TTS."""
+    import sys
+
     text = (text or "").strip()
     if not text:
         return None
     cfg = load()["halo"]
-    provider = cfg.get("voice_provider") or "macos"
+    provider = (cfg.get("voice_provider") or "").strip().lower()
+    # Windows/Linux have no `say`; default to browser TTS unless ElevenLabs is chosen.
+    if not provider:
+        provider = "macos" if sys.platform == "darwin" else "browser"
+    if provider == "macos" and sys.platform != "darwin":
+        logger.info("voice_provider=macos on %s — using browser TTS.", sys.platform)
+        return None
     if provider == "browser":
         return None
     if provider == "elevenlabs":
@@ -116,7 +124,9 @@ def synthesize(text: str) -> str | None:
             path = _run_with_timeout(elevenlabs_tts, text, key, voice_id)
             if path:
                 return f"/voice/{path.name}"
-        logger.info("ElevenLabs unavailable — falling back to macOS say.")
+        logger.info("ElevenLabs unavailable — falling back to browser TTS on non-Mac." if sys.platform != "darwin" else "ElevenLabs unavailable — falling back to macOS say.")
+        if sys.platform != "darwin":
+            return None
     path = _run_with_timeout(macos_say, text, cfg.get("voice_id") or "Samantha")
     if path:
         return f"/voice/{path.name}"

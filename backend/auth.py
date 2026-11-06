@@ -136,7 +136,7 @@ def _public(row: sqlite3.Row) -> dict[str, Any]:
         "perks": perks,
         "email_opt_in": opt_in,
         "product": "DJ Bot Botty",
-        "buddy": "Halo",
+        "buddy": "Chief",
     }
 
 

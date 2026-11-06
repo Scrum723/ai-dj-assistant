@@ -304,6 +304,21 @@ def room_urls() -> dict:
     return {"local": local, "lan": lan, "short": f"http://127.0.0.1:{port}/room"}
 
 
+def _json_safe(obj):
+    """Replace NaN/Inf so FastAPI json.dumps does not 500 the /state feed."""
+    import math
+
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
 def snapshot() -> dict:
     current = state["current_track"]
     key = current.get("key") if current else None
@@ -315,7 +330,7 @@ def snapshot() -> dict:
             sim_snap = dj.simulator.snapshot()
         except Exception:
             sim_snap = None
-    return {
+    payload = {
         **state,
         "track_count": len(all_tracks()),
         "compatible_keys": compatible_keys(key),
@@ -333,6 +348,7 @@ def snapshot() -> dict:
         "settings": cfg,
         "room_urls": room_urls(),
     }
+    return _json_safe(payload)
 
 
 def push_log(message: str):
@@ -1674,7 +1690,8 @@ def incoming_chat(
     user = user_from_cookie(djbb_session)
     author = req.author
     profile_id = None
-    if user and platform == "room":
+    # Attach booth-pass identity for room + booth test chat + mic so Chief remembers fans.
+    if user and platform in ("room", "dashboard", "mic", "overlay"):
         author = user.get("display_name") or author
         profile_id = user.get("id")
     msg = ChatMessage.make_room(author=author, text=req.message)

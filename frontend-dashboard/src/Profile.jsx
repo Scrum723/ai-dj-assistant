@@ -110,6 +110,21 @@ export default function Profile({ onBack }) {
     return <div style={wrap}><p style={{ color: '#9ca3af' }}>Loading profile…</p></div>;
   }
 
+  if (!user && err) {
+    return (
+      <div style={wrap}>
+        <div style={card}>
+          {onBack ? <button type="button" onClick={onBack} style={ghost}>← Back</button> : null}
+          <h2 style={{ marginTop: 12 }}>Booth pass</h2>
+          <p style={{ color: '#fca5a5' }}>{err}</p>
+          <p style={{ color: '#9ca3af' }}>
+            Sign out from the top bar and create or log into a booth pass. Profiles save in the local users database and need a session cookie.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   const perks = user?.perks || {};
 
   return (

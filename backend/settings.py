@@ -10,9 +10,23 @@ from pathlib import Path
 
 LOCK = threading.Lock()
 
-APP_DIR = Path.home() / "Library" / "Application Support" / "HaloDJ"
+def _default_app_dir() -> Path:
+    """Mac: ~/Library/Application Support/HaloDJ. Windows: %APPDATA%\\HaloDJ."""
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or str(Path.home() / "AppData" / "Roaming")
+        preferred = Path(base) / "HaloDJ"
+        legacy = Path.home() / "Library" / "Application Support" / "HaloDJ"
+        # Keep reading a legacy Mac-style path if this machine already wrote settings there.
+        if not (preferred / "settings.json").exists() and (legacy / "settings.json").exists():
+            return legacy
+        return preferred
+    return Path.home() / "Library" / "Application Support" / "HaloDJ"
+
+
+APP_DIR = _default_app_dir()
 SETTINGS_PATH = APP_DIR / "settings.json"
 VOICE_DIR = APP_DIR / "voice"
+_DEFAULT_VOICE_PROVIDER = "macos" if os.name != "nt" else "browser"
 
 # Pre-rename default persona — used only for one-time migration matching.
 OLD_DEFAULT_PERSONA = (
@@ -34,7 +48,7 @@ DEFAULTS = {
         "name": "Chief",
         "persona_preset": "hype",
         "persona": DEFAULT_PERSONA,
-        "voice_provider": "macos",
+        "voice_provider": _DEFAULT_VOICE_PROVIDER,
         "voice_id": "Samantha",
         "elevenlabs_key": "",
         "elevenlabs_voice_id": "21m00Tcm4TlvDq8ikWAM",
@@ -261,7 +275,16 @@ def load() -> dict:
         except Exception:
             raw = {}
         data = _deep_merge(DEFAULTS, raw)
-        if _migrate_halo_to_chief(data):
+        changed = _migrate_halo_to_chief(data)
+        # One-time: macOS `say` is not available on Windows — use browser TTS.
+        if os.name == "nt":
+            halo = data.get("halo") if isinstance(data.get("halo"), dict) else {}
+            meta = data.setdefault("meta", {})
+            if halo.get("voice_provider") == "macos" and not meta.get("voice_browser_windows"):
+                halo["voice_provider"] = "browser"
+                meta["voice_browser_windows"] = True
+                changed = True
+        if changed:
             SETTINGS_PATH.write_text(json.dumps(data, indent=2))
         return data
 
