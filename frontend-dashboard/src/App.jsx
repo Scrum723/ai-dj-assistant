@@ -470,6 +470,10 @@ function CohostPanel({ state, refresh }) {
   const [youtube, setYoutube] = useState(agent.youtube_id || '');
   const [asName, setAsName] = useState('Charles');
   const [asMsg, setAsMsg] = useState('');
+  const [sendStatus, setSendStatus] = useState('');
+  const [sending, setSending] = useState(false);
+  const [listening, setListening] = useState(false);
+  const recognitionRef = React.useRef(null);
 
   const toggleDemo = async () => {
     await api('/agent/demo', { method: 'POST', body: JSON.stringify({ enabled: !agent.demo }) });
@@ -480,10 +484,55 @@ function CohostPanel({ state, refresh }) {
     refresh();
   };
   const sendChat = async () => {
-    if (!asMsg.trim()) return;
-    await api('/chat', { method: 'POST', body: JSON.stringify({ author: asName || 'Fan', message: asMsg.trim(), platform: 'dashboard' }) });
-    setAsMsg('');
-    refresh();
+    if (!asMsg.trim() || sending) return;
+    setSending(true);
+    setSendStatus('Sending…');
+    try {
+      await api('/chat', {
+        method: 'POST',
+        body: JSON.stringify({ author: asName || 'Fan', message: asMsg.trim(), platform: 'dashboard' }),
+      });
+      setAsMsg('');
+      setSendStatus('Sent — Chief answers in a few seconds (watch the Room panel).');
+      refresh();
+    } catch (err) {
+      setSendStatus(`Send failed: ${err?.message || 'network error'}`);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const togglePushToTalk = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setSendStatus('Voice input needs Chrome/Edge on this PC (Web Speech API).');
+      return;
+    }
+    if (listening && recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch { /* ignore */ }
+      setListening(false);
+      return;
+    }
+    const rec = new SpeechRecognition();
+    recognitionRef.current = rec;
+    rec.continuous = false;
+    rec.interimResults = false;
+    rec.onresult = (ev) => {
+      const said = ev.results[ev.results.length - 1][0].transcript;
+      if (said) setAsMsg((prev) => (prev ? `${prev} ${said}` : said));
+    };
+    rec.onerror = () => {
+      setListening(false);
+      setSendStatus('Mic error — allow microphone permission for this site.');
+    };
+    rec.onend = () => setListening(false);
+    try {
+      rec.start();
+      setListening(true);
+      setSendStatus('Listening… speak, then press Send (or enable always-on mic in Settings).');
+    } catch {
+      setSendStatus('Could not start mic.');
+    }
   };
 
   return (
@@ -492,7 +541,10 @@ function CohostPanel({ state, refresh }) {
         <div style={{ ...cardStyle, borderLeft: '4px solid #db2777' }}>
           <h2 style={headerStyle}><Bot size={20} /> {agent.name || 'Chief'} — DJ Bot Botty’s LLM buddy</h2>
           <p style={{ color: '#d1d5db', lineHeight: 1.6, marginTop: 16 }}>
-            {agent.name || 'Chief'} talks on their own: greets new people, answers questions, queues requests, and fills silence so the overlay is never stuck on one sentence. Open <strong>http://127.0.0.1:5174</strong> as an OBS Browser source (click the page once so the browser allows voice).
+            {agent.name || 'Chief'} talks on their own: greets new people, answers questions, queues requests, and fills silence so the overlay is never stuck on one sentence. Open the overlay at <strong>/overlay/</strong> (click once so the browser allows voice).
+          </p>
+          <p style={{ color: '#9ca3af', fontSize: 13, marginTop: 8 }}>
+            AI: {agent.ai_online ? 'online (Gemini)' : 'offline — local lines only'} · Voice on Windows uses browser speech (Settings → voice provider).
           </p>
           <div style={{ display: 'flex', gap: 12, marginTop: 18, flexWrap: 'wrap' }}>
             <button onClick={toggleDemo} style={{ ...navBtnStyle(true, agent.demo ? '#f59e0b' : '#374151') }}>
@@ -506,7 +558,9 @@ function CohostPanel({ state, refresh }) {
 
         <div style={cardStyle}>
           <h2 style={headerStyle}>Talk to {agent.name || 'Chief'} (test)</h2>
-          <p style={{ color: '#9ca3af', fontSize: 14 }}>Type as a viewer. {agent.name || 'Chief'} should answer on the overlay.</p>
+          <p style={{ color: '#9ca3af', fontSize: 14 }}>
+            Type or use push-to-talk. This is chat → Chief → spoken reply (not a live phone-style V2V call).
+          </p>
           <input value={asName} onChange={(e) => setAsName(e.target.value)} placeholder="Viewer name" style={{ ...inputStyle, width: '100%' }} />
           <input
             value={asMsg}
@@ -515,7 +569,15 @@ function CohostPanel({ state, refresh }) {
             placeholder={`hey ${(agent.name || 'Chief').toLowerCase()}! play Mad World`}
             style={{ ...inputStyle, width: '100%' }}
           />
-          <button onClick={sendChat} style={{ ...navBtnStyle(true, '#db2777') }}>Send to {agent.name || 'Chief'}</button>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 4 }}>
+            <button type="button" disabled={sending} onClick={sendChat} style={{ ...navBtnStyle(true, sending ? '#6b7280' : '#db2777') }}>
+              {sending ? 'Sending…' : `Send to ${agent.name || 'Chief'}`}
+            </button>
+            <button type="button" onClick={togglePushToTalk} style={{ ...navBtnStyle(true, listening ? '#f59e0b' : '#374151') }}>
+              {listening ? 'Stop mic' : 'Push to talk'}
+            </button>
+          </div>
+          {sendStatus ? <p style={{ color: '#c4b5fd', fontSize: 13, marginTop: 10 }}>{sendStatus}</p> : null}
         </div>
 
         <div style={cardStyle}>

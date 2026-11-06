@@ -1778,7 +1778,8 @@ class CohostAgent:
         prompt = "\n".join(prompt_parts)
         try:
             persona = self._persona()
-            tokens = 160 if limit >= 3 else 120
+            # Floor is raised inside GeminiProvider for thinking models; keep headroom here too.
+            tokens = 512 if limit >= 3 else 384
 
             def _call():
                 return self._llm.generate(persona, prompt, max_tokens=tokens)

@@ -92,18 +92,30 @@ function SignupForm({ onBack, onDone }) {
   const submit = async (e) => {
     e.preventDefault();
     setErr('');
-    const res = await fetch(`${API}/auth/signup`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ display_name, email, password }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      setErr(data.detail || 'Could not create pass');
-      return;
+    try {
+      const res = await fetch(`${API}/auth/signup`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ display_name, email, password }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = data.detail;
+        setErr(typeof detail === 'string' ? detail : (detail ? JSON.stringify(detail) : 'Could not create pass'));
+        return;
+      }
+      // Confirm cookie stuck (Secure cookies fail on http:// unless COOKIE_SECURE=false).
+      const me = await fetch(`${API}/auth/me`, { credentials: 'include' });
+      const meData = await me.json().catch(() => ({}));
+      if (!meData.user) {
+        setErr('Pass created but browser did not keep the session cookie. Use http://127.0.0.1:8000 (not https) and ensure COOKIE_SECURE=false.');
+        return;
+      }
+      onDone(meData.user);
+    } catch (ex) {
+      setErr(ex?.message || 'Network error creating pass');
     }
-    onDone(data.user);
   };
 
   return (

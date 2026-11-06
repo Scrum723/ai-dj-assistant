@@ -52,17 +52,40 @@ class GeminiProvider:
             return ""
         from google.genai import types
 
+        # Gemini 3.x uses internal thinking tokens that count against max_output_tokens.
+        # A low cap (e.g. 120) often finishes with MAX_TOKENS and empty visible text.
+        out_tokens = max(int(max_tokens or 0), 512)
+        config_kwargs = dict(
+            system_instruction=system,
+            temperature=0.8,
+            max_output_tokens=out_tokens,
+            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        )
+        try:
+            # Prefer no/low thinking budget when the SDK supports it.
+            config_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+        except Exception:
+            pass
         response = self._client.models.generate_content(
             model=self.model,
             contents=prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                temperature=0.8,
-                max_output_tokens=max_tokens,
-                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-            ),
+            config=types.GenerateContentConfig(**config_kwargs),
         )
-        return (getattr(response, "text", None) or "").strip()
+        text = (getattr(response, "text", None) or "").strip()
+        if text:
+            return text
+        # Fallback: stitch text parts if .text is empty but candidates exist.
+        try:
+            for cand in response.candidates or []:
+                parts = getattr(getattr(cand, "content", None), "parts", None) or []
+                chunk = " ".join(
+                    (getattr(p, "text", None) or "").strip() for p in parts if getattr(p, "text", None)
+                ).strip()
+                if chunk:
+                    return chunk
+        except Exception:
+            pass
+        return ""
 
 
 class XaiProvider:

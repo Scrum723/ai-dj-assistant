@@ -257,8 +257,11 @@ export default function Settings({ state, refresh }) {
         </label>
         <label style={{ display: 'flex', gap: 8, margin: '12px 0', color: '#e5e7eb' }}>
           <input type="checkbox" checked={!!halo.listen_mic} onChange={(e) => setHalo({ listen_mic: e.target.checked })} />
-          {halo.name || 'Chief'} may listen to this Mac’s mic (off in DJ mode)
+          Always-on mic → {halo.name || 'Chief'} (browser speech-to-text; off in DJ mode). For a one-shot, use Co-host → Push to talk.
         </label>
+        <p style={{ color: '#9ca3af', fontSize: 12, marginTop: -4 }}>
+          This is not a live phone-style voice call. It is: your speech → text chat → {halo.name || 'Chief'} reply → spoken TTS on the overlay.
+        </p>
         <label style={lab}>YouTube live video ID
           <input value={form.youtube_id || ''} onChange={(e) => setForm({ ...form, youtube_id: e.target.value })} style={inp} />
         </label>
