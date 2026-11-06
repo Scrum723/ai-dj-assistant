@@ -1,5 +1,7 @@
 # DJ Bot Botty — Alpha Progress
 
+Chief was previously called Halo; legacy `HALO_*` env vars, `!halo` commands, `halo.db` and settings key `halo` still work. Historical phase titles below still say Halo.
+
 Branch: `alpha/a1-d1`
 Spec: `docs/djbotbotty_full_build_prompt.md`
 
@@ -63,7 +65,7 @@ Concrete setup checklist (no credentials invented here — create these when rea
 - [ ] Controller + audio loopback (e.g. BlackHole) for takeover/silence watchdog (C5)
 
 ### Alpha dress rehearsal (D1)
-- [ ] Multistream with merged room, Halo, OBS overlay, kill switch
+- [ ] Multistream with merged room, Chief, OBS overlay, kill switch
 - [ ] Review/extend `settings.moderation.blocklist` on a live show
 - [ ] Booth-pass link across ≥2 platforms after OAuth apps exist
 - [ ] Enable one official adapter + one relay send with real tokens
@@ -76,3 +78,26 @@ Concrete setup checklist (no credentials invented here — create these when rea
 - B4 docs (2026-10-24): Kick webhook RSA over messageId.timestamp.body (docs.kick.com/events/webhook-security); Facebook Graph v26 live-video comments; Rumble livestream API JSON (support article 2025-11-20); YT liveChatMessages.list quota 5/call + pollingIntervalMillis. Dead adapters isolated; Charles tokens logged as blockers.
 - B5 docs (2026-10-24): TikTokLive optional (unofficial webcast; no official LIVE chat API); X recent search conversation_id/quoted_tweet_id (docs.x.com rate limits). Both off by default; auto-disable after 5 failures / 10 min + operator alert.
 - Session restart mid-A6: WIP stashed as `wip/a6-shoutouts`; setup gate (env/docs/blockers/gitignore) runs before restoring A6.
+
+## Chief + Visualizer build
+
+- [x] R0 — Launcher overlay path fix — 4519dc8 overlay fallback to backend/frontend-overlay
+- [x] R1 — Name source of truth + settings migration — cbb94fb Chief default + chief alias + migration
+- [x] R2 — Co-host brain — a21bbc8 cohost_name + !chief aliases
+- [x] R3 — relay names — 98a6c51
+- [x] R4 — envcompat — c24b13a
+- [x] R5 — Frontends, desktop app, docs
+- [ ] V0 — Vendor the visualizer
+- [ ] V1 — Now Playing service (core module)
+- [ ] V2 — Now Playing endpoints + realtime
+- [ ] V3 — Chief track awareness
+- [ ] V4 — Visualizer remote control (websocket)
+- [ ] V5 — Dashboard visualizer panel
+- [ ] V6 — OBS / Restream usage + desktop/launcher
+- [ ] V7 — Health + metrics
+
+### Blocked on Charles
+(see plan section 7)
+
+### Notes / deviations
+- Started from origin/main @ c902a73 on branch feature/chief-visualizer

@@ -10,7 +10,7 @@ Fill truthfully at D1. Code/CI items can be checked here; live dress-rehearsal a
 - [ ] Merged room live on djbotbotty.com with YouTube, Twitch, Kick, Facebook, Rumble (TikTok/X experimental, off by default) — **Blocked on Charles** (tokens + dress rehearsal)
 - [ ] Booth pass linking tested across at least two platforms — **Blocked on Charles** (OAuth apps)
 - [x] Unified bans hide a person everywhere; mod log works — B6 tests; live push_bans needs platform tokens
-- [x] Halo answers the merged room within budget; priority queue, supporter thanks and segments working; daily LLM cap visible — A3–A7 offline tests; live LLM needs keys on Railway
+- [x] Chief answers the merged room within budget; priority queue, supporter thanks and segments working; daily LLM cap visible — A3–A7 offline tests; live LLM needs keys on Railway
 - [x] Relay off by default; tested on one platform — B7 unit/fixtures; **live send** still needs bot token (Charles)
 - [x] DJ automation off by default; simulator transition scores logged (target: average 80+ over 3 replayed sets, zero silences) — C4/C5 sim path; Mac MIDI still Charles
 - [x] Railway: `/healthz` with adapter status, DB volume, backups, Secure cookies — code paths ready (`DATA_DIR` backups, `COOKIE_SECURE` / `RAILWAY_ENVIRONMENT`); **volume mount + prod verify** Charles

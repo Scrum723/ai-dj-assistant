@@ -65,7 +65,7 @@ export default function Settings({ state, refresh }) {
 
   if (!form) return <p style={{ color: '#9ca3af' }}>Loading settings…</p>;
 
-  const halo = form.halo;
+  const halo = form.chief ?? form.halo;
   const env = form.environment;
   const setHalo = (patch) => setForm({ ...form, halo: { ...halo, ...patch } });
   const setEnv = (patch) => setForm({ ...form, environment: { ...env, ...patch } });
@@ -106,7 +106,7 @@ export default function Settings({ state, refresh }) {
     await api('/settings', { method: 'POST', body: JSON.stringify(payload) });
     setEleven('');
     setSecretDrafts({});
-    setSaved('Saved. Voice and energy take effect on the next line Halo speaks.');
+    setSaved(`Saved. Voice and energy take effect on the next line ${halo.name || 'Chief'} speaks.`);
     refresh();
     api('/community/status').then((d) => setAdapterHealth(d?.adapters || {})).catch(() => {});
   };
@@ -114,7 +114,7 @@ export default function Settings({ state, refresh }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
       <section style={card}>
-        <h2 style={h}>Halo (LLM buddy)</h2>
+        <h2 style={h}>{halo.name || 'Chief'} (LLM buddy)</h2>
         <label style={lab}>Name
           <input value={halo.name} onChange={(e) => setHalo({ name: e.target.value })} style={inp} />
         </label>
@@ -145,7 +145,7 @@ export default function Settings({ state, refresh }) {
             checked={!!halo.dj_mode_silent}
             onChange={(e) => setHalo({ dj_mode_silent: e.target.checked })}
           />
-          Mute all Halo speech (legacy silent DJ mode)
+          Mute all {halo.name || 'Chief'} speech (legacy silent DJ mode)
         </label>
         <label style={lab}>Voice engine
           <select value={halo.voice_provider} onChange={(e) => setHalo({ voice_provider: e.target.value })} style={inp}>
@@ -164,7 +164,7 @@ export default function Settings({ state, refresh }) {
         {halo.voice_provider === 'elevenlabs' && (
           <>
             <p style={{ color: '#9ca3af', fontSize: 13 }}>
-              Optional. You do not need ElevenLabs for Halo to talk — macOS Samantha/Ava is already much better than the old browser voice.
+              Optional. You do not need ElevenLabs for {halo.name || 'Chief'} to talk — macOS Samantha/Ava is already much better than the old browser voice.
               Add a key only if you want a custom studio voice. {halo.elevenlabs_key_set ? 'A key is already saved.' : 'No key saved yet.'}
             </p>
             <label style={lab}>ElevenLabs API key
@@ -175,7 +175,7 @@ export default function Settings({ state, refresh }) {
             </label>
           </>
         )}
-        <h3 style={{ ...h, fontSize: 16, marginTop: 18 }}>What Halo is allowed to do</h3>
+        <h3 style={{ ...h, fontSize: 16, marginTop: 18 }}>What {halo.name || 'Chief'} is allowed to do</h3>
         {CAPS.map(([key, label]) => (
           <label key={key} style={{ display: 'flex', gap: 8, margin: '8px 0', color: '#e5e7eb' }}>
             <input type="checkbox" checked={!!halo.capabilities?.[key]} onChange={(e) => setCap(key, e.target.checked)} />
@@ -204,7 +204,7 @@ export default function Settings({ state, refresh }) {
         </label>
         <label style={lab}>Distraction {env.distraction}
           <input type="range" min="0" max="100" value={env.distraction} onChange={(e) => setEnv({ distraction: Number(e.target.value) })} style={{ width: '100%' }} />
-          <span style={{ color: '#9ca3af', fontSize: 12 }}>Low = Halo stays out of the way. High = more idle talk and overlay motion.</span>
+          <span style={{ color: '#9ca3af', fontSize: 12 }}>Low = {halo.name || 'Chief'} stays out of the way. High = more idle talk and overlay motion.</span>
         </label>
         <label style={lab}>Autonomy {form.autonomy}
           <input type="range" min="1" max="100" value={form.autonomy} onChange={(e) => setForm({ ...form, autonomy: Number(e.target.value) })} style={{ width: '100%' }} />
@@ -215,7 +215,7 @@ export default function Settings({ state, refresh }) {
         </label>
         <label style={{ display: 'flex', gap: 8, margin: '12px 0', color: '#e5e7eb' }}>
           <input type="checkbox" checked={!!halo.listen_mic} onChange={(e) => setHalo({ listen_mic: e.target.checked })} />
-          Halo may listen to this Mac’s mic (off in DJ mode)
+          {halo.name || 'Chief'} may listen to this Mac’s mic (off in DJ mode)
         </label>
         <label style={lab}>YouTube live video ID
           <input value={form.youtube_id || ''} onChange={(e) => setForm({ ...form, youtube_id: e.target.value })} style={inp} />

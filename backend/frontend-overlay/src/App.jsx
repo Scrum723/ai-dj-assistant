@@ -19,7 +19,7 @@ function shortTitle(name = '') {
 
 export default function App() {
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [currentMessage, setCurrentMessage] = useState('Halo is in the booth...');
+  const [currentMessage, setCurrentMessage] = useState('Chief is in the booth...');
   const [target, setTarget] = useState(null);
   const [mood, setMood] = useState('listening');
   const [state, setState] = useState(null);
@@ -129,7 +129,7 @@ export default function App() {
   const glow = VIBE_GLOW[vibe] || '#7c3aed';
   const liveMood = isSpeaking ? (mood || 'speaking') : (agent.dj_mode ? 'quiet' : (agent.mood || 'listening'));
   const distraction = (state?.settings?.environment?.distraction ?? 30) / 100;
-  const haloName = agent.name || 'Halo';
+  const haloName = agent.name || 'Chief';
   const live = agent.live !== false && !agent.waiting_room;
   const streams = state?.settings?.streams || {};
   const streamEntries = Object.entries(streams).filter(([, url]) => String(url || '').trim());
@@ -333,7 +333,7 @@ const BADGE_LABEL = {
   facebook: 'FB',
   rumble: 'RB',
   room: 'ROOM',
-  halo: 'HALO',
+  halo: 'CHIEF',
 };
 
 function BadgeText({ platform }) {

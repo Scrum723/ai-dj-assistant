@@ -65,7 +65,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    const listen = state?.settings?.halo?.listen_mic && !djMode;
+    const listen = (state?.settings?.chief ?? state?.settings?.halo)?.listen_mic && !djMode;
     if (!listen || !('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) return;
     const Ctor = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new Ctor();
@@ -77,7 +77,7 @@ export default function App() {
     };
     try { rec.start(); } catch { /* mic permission or already started */ }
     return () => { try { rec.stop(); } catch { /* ignore */ } };
-  }, [state?.settings?.halo?.listen_mic, djMode]);
+  }, [(state?.settings?.chief ?? state?.settings?.halo)?.listen_mic, djMode]);
 
   return (
     <div style={{ backgroundColor: VIBES[vibe] || '#121212', color: '#fff', minHeight: '100vh', fontFamily: 'system-ui, sans-serif' }}>
@@ -89,13 +89,13 @@ export default function App() {
         <StatusPills state={state} error={error} />
         <div style={{ display: 'flex', gap: '15px' }}>
           <button onClick={toggleDj} style={navBtnStyle(true, djMode ? '#f59e0b' : '#374151')}>
-            {djMode ? 'DJ MODE — Halo quiet' : 'Halo (LLM) live'}
+            {djMode ? 'DJ MODE — Chief quiet' : 'Chief live / DJ MODE'}
           </button>
           <button onClick={() => openAllStreams(state?.settings)} style={navBtnStyle(true, '#ff0033')}>
             Open all streams
           </button>
           <button onClick={() => setActiveTab('dj')} style={navBtnStyle(activeTab === 'dj', '#7c3aed')}>Booth</button>
-          <button onClick={() => setActiveTab('host')} style={navBtnStyle(activeTab === 'host', '#db2777')}>{state?.agent?.name || 'Halo'}</button>
+          <button onClick={() => setActiveTab('host')} style={navBtnStyle(activeTab === 'host', '#db2777')}>Co-host {state?.agent?.name || 'Chief'}</button>
           <button onClick={() => setActiveTab('room')} style={navBtnStyle(activeTab === 'room', '#10b981')}>Room</button>
           <button onClick={() => setActiveTab('fan')} style={navBtnStyle(activeTab === 'fan', '#059669')}>Requests</button>
           <button onClick={() => setActiveTab('profile')} style={navBtnStyle(activeTab === 'profile', '#a78bfa')}>Profile</button>
@@ -123,7 +123,7 @@ function StatusPills({ state, error }) {
     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
       <Pill ok={apiOk} label={apiOk ? 'API online' : 'API offline'} />
       <Pill ok={midiOk} label={midiOk ? `MIDI: ${state.midi_port}` : 'MIDI offline'} />
-      <Pill ok={!!state?.agent?.running && !state?.agent?.dj_mode} label={state?.agent?.dj_mode ? 'DJ mode' : (state?.agent?.running ? `${state.agent.name || 'Halo'} ${state.agent.mood || 'live'}` : 'Halo offline')} />
+      <Pill ok={!!state?.agent?.running && !state?.agent?.dj_mode} label={state?.agent?.dj_mode ? 'DJ mode' : (state?.agent?.running ? `${state.agent.name || 'Chief'} ${state.agent.mood || 'live'}` : 'Chief offline')} />
       <Pill ok={(state?.settings?.environment?.energy_mode || 'balanced') === 'eco'} label={state?.settings?.environment?.energy_mode || 'balanced'} />
     </div>
   );
@@ -460,9 +460,9 @@ function CohostPanel({ state, refresh }) {
     <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 30 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
         <div style={{ ...cardStyle, borderLeft: '4px solid #db2777' }}>
-          <h2 style={headerStyle}><Bot size={20} /> Halo — DJ Bot Botty’s LLM buddy</h2>
+          <h2 style={headerStyle}><Bot size={20} /> {agent.name || 'Chief'} — DJ Bot Botty’s LLM buddy</h2>
           <p style={{ color: '#d1d5db', lineHeight: 1.6, marginTop: 16 }}>
-            Halo talks on her own: greets new people, answers questions, queues requests, and fills silence so the overlay is never stuck on one sentence. Open <strong>http://127.0.0.1:5174</strong> as an OBS Browser source (click the page once so the browser allows voice).
+            {agent.name || 'Chief'} talks on their own: greets new people, answers questions, queues requests, and fills silence so the overlay is never stuck on one sentence. Open <strong>http://127.0.0.1:5174</strong> as an OBS Browser source (click the page once so the browser allows voice).
           </p>
           <div style={{ display: 'flex', gap: 12, marginTop: 18, flexWrap: 'wrap' }}>
             <button onClick={toggleDemo} style={{ ...navBtnStyle(true, agent.demo ? '#f59e0b' : '#374151') }}>
@@ -475,17 +475,17 @@ function CohostPanel({ state, refresh }) {
         </div>
 
         <div style={cardStyle}>
-          <h2 style={headerStyle}>Talk to Halo (test)</h2>
-          <p style={{ color: '#9ca3af', fontSize: 14 }}>Type as a viewer. Halo should answer on the overlay.</p>
+          <h2 style={headerStyle}>Talk to {agent.name || 'Chief'} (test)</h2>
+          <p style={{ color: '#9ca3af', fontSize: 14 }}>Type as a viewer. {agent.name || 'Chief'} should answer on the overlay.</p>
           <input value={asName} onChange={(e) => setAsName(e.target.value)} placeholder="Viewer name" style={{ ...inputStyle, width: '100%' }} />
           <input
             value={asMsg}
             onChange={(e) => setAsMsg(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && sendChat()}
-            placeholder="hey halo! play Mad World"
+            placeholder={`hey ${(agent.name || 'Chief').toLowerCase()}! play Mad World`}
             style={{ ...inputStyle, width: '100%' }}
           />
-          <button onClick={sendChat} style={{ ...navBtnStyle(true, '#db2777') }}>Send to Halo</button>
+          <button onClick={sendChat} style={{ ...navBtnStyle(true, '#db2777') }}>Send to {agent.name || 'Chief'}</button>
         </div>
 
         <div style={cardStyle}>
@@ -499,10 +499,10 @@ function CohostPanel({ state, refresh }) {
       <div style={cardStyle}>
         <h2 style={headerStyle}><Users size={20} /> Room ({agent.viewer_count || 0})</h2>
         <div style={{ maxHeight: 520, overflow: 'auto', marginTop: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {(agent.chat || []).length === 0 && <p style={{ color: '#9ca3af' }}>Halo will start talking in a couple of seconds...</p>}
+          {(agent.chat || []).length === 0 && <p style={{ color: '#9ca3af' }}>{agent.name || 'Chief'} will start talking in a couple of seconds...</p>}
           {(agent.chat || []).slice().reverse().map((line, i) => (
-            <div key={`${line.ts}-${i}`} style={{ padding: 12, background: line.author === 'Halo' ? '#3b0764' : '#1f2937', borderRadius: 8 }}>
-              <strong style={{ color: line.author === 'Halo' ? '#e9d5ff' : '#6ee7b7' }}>{line.author}</strong>
+            <div key={`${line.ts}-${i}`} style={{ padding: 12, background: line.author === (agent.name || 'Chief') ? '#3b0764' : '#1f2937', borderRadius: 8 }}>
+              <strong style={{ color: line.author === (agent.name || 'Chief') ? '#e9d5ff' : '#6ee7b7' }}>{line.author}</strong>
               <div style={{ color: '#e5e7eb', marginTop: 4 }}>{line.message}</div>
             </div>
           ))}
