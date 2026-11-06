@@ -565,6 +565,8 @@ class CohostAgent:
             "p95_ms": int(round(_percentile(lats, 95))),
             "est_cost_usd": round(self._tokens_est / 1000.0 * self._cost_per_1k(), 6),
             "tokens_est": self._tokens_est,
+            "announce_count": int(self._announce_count),
+            "track_id_answers": int(self._track_id_answers),
         }
 
     def _sync_queue_config(self) -> None:

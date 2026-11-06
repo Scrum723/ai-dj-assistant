@@ -243,6 +243,7 @@ class NowPlaying:
         self._manual: Optional[TrackDict] = None
         self._listeners: list[OnChangeFn] = []
         self._stop = False
+        self._last_change_at: Optional[float] = None
         self._history: deque[TrackDict] = deque(maxlen=HISTORY_MAX)
         self._load_history()
 
@@ -286,6 +287,19 @@ class NowPlaying:
             return {}
         out = {k: v for k, v in cur.items() if k != "unavailable"}
         return out
+
+    def health(self) -> dict:
+        """Compact status for /healthz: source, ok, last_change_age."""
+        cur = self._current
+        source = (cur or {}).get("source") if cur else None
+        age = None
+        if self._last_change_at is not None:
+            age = max(0.0, float(self._clock()) - float(self._last_change_at))
+        return {
+            "source": source,
+            "ok": True,
+            "last_change_age": age,
+        }
 
     def current(self) -> Optional[TrackDict]:
         return None if not self._current else dict(self._current)
@@ -565,6 +579,7 @@ class NowPlaying:
         if track.get("started_at") is None:
             track["started_at"] = now
         self._current = track
+        self._last_change_at = now
         self._pending = None
         self._pending_since = None
         self._append_history(track)

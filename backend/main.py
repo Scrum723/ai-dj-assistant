@@ -1637,11 +1637,27 @@ def healthz():
             adapters = (aggregator.status() or {}).get("adapters") or {}
         except Exception:
             adapters = {}
+    if nowplaying_svc:
+        try:
+            np_health = nowplaying_svc.health()
+        except Exception:
+            np_health = {"source": None, "ok": False, "last_change_age": None}
+    else:
+        np_health = {"source": None, "ok": False, "last_change_age": None}
+    try:
+        vis_clients = int(vis_ctl.snapshot().get("clients") or 0)
+    except Exception:
+        vis_clients = 0
     return {
         "ok": True,
         "midi": midi_ok,
         "llm": llm_ok,
         "adapters": adapters,
+        "nowplaying": np_health,
+        "visualizer": {
+            "served": bool(os.path.isdir(VIS_DIR)),
+            "clients": vis_clients,
+        },
     }
 
 
@@ -1691,6 +1707,8 @@ def halo_metrics(_auth: None = Depends(require_operator)):
             "p95_ms": 0,
             "est_cost_usd": 0.0,
             "tokens_est": 0,
+            "announce_count": 0,
+            "track_id_answers": 0,
         }
     return agent.metrics()
 

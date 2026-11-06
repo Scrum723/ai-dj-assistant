@@ -93,8 +93,8 @@ Concrete setup checklist (no credentials invented here — create these when rea
 - [x] V3 — Chief track awareness
 - [x] V4 — Visualizer remote control (websocket) — 9145d05
 - [x] V5 — Dashboard visualizer panel
-- [ ] V6 — OBS / Restream usage + desktop/launcher
-- [ ] V7 — Health + metrics
+- [x] V6 — OBS/Restream docs — 3401def
+- [x] V7 — Health + metrics
 
 ### Blocked on Charles
 (see plan section 7)
