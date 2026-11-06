@@ -22,6 +22,7 @@ from community.shoutouts import (
     merge_support,
     thank_template,
 )
+from envcompat import env
 from halo_queue import ACK_WAIT_SEC, PriorityQueue
 from llm import LLMProvider, get_provider
 from memory import (
@@ -489,12 +490,12 @@ class CohostAgent:
 
     def _cost_per_1k(self) -> float:
         try:
-            return float(os.getenv("HALO_COST_PER_1K") or "0.0001")
+            return float(env("COST_PER_1K") or "0.0001")
         except ValueError:
             return 0.0001
 
     def _daily_call_cap(self) -> Optional[int]:
-        raw = os.getenv("HALO_DAILY_CALL_CAP")
+        raw = env("DAILY_CALL_CAP")
         if raw is None or str(raw).strip() == "":
             return None
         try:

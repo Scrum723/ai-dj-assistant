@@ -10,14 +10,16 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from envcompat import env
+
 logger = logging.getLogger(__name__)
 NOTES = Path(__file__).resolve().parent / "halo_training.jsonl"
 
 
 def training_interval_sec() -> int:
     """Non-use training. Slow down once the buddy is on Grok 3+."""
-    model = (os.getenv("GEMINI_MODEL") or os.getenv("XAI_MODEL") or os.getenv("HALO_MODEL") or "").lower()
-    level = os.getenv("HALO_TRAINING_LEVEL", "")
+    model = (os.getenv("GEMINI_MODEL") or os.getenv("XAI_MODEL") or env("MODEL") or "").lower()
+    level = env("TRAINING_LEVEL") or ""
     if level.isdigit() and int(level) >= 3:
         return 6 * 60 * 60
     if "grok-3" in model or "grok-4" in model or "gemini-3" in model or "gemini-2.5" in model:

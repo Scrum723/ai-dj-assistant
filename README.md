@@ -106,17 +106,23 @@ Halo starts with the app. The overlay is her face: she greets people, answers ch
 
 `GEMINI_API_KEY` in `~/.env` makes replies generative. Without it, Halo still talks using local lines.
 
-### Halo LLM / memory env vars
+### Chief LLM / memory env vars
+
+`CHIEF_*` is primary; legacy `HALO_*` still accepted (CHIEF wins when both set). Bare `PORT` overrides `CHIEF_PORT` / `HALO_PORT`.
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `HALO_PROVIDER` | `gemini` | LLM backend: `gemini` or `xai` (alias `grok`) |
-| `GEMINI_API_KEY` | — | Required when `HALO_PROVIDER=gemini` for generative replies |
+| `CHIEF_PROVIDER` | `gemini` | LLM backend: `gemini` or `xai` (alias `grok`) (legacy `HALO_PROVIDER` still accepted) |
+| `GEMINI_API_KEY` | — | Required when `CHIEF_PROVIDER=gemini` for generative replies |
 | `GEMINI_MODEL` | `gemini-3.6-flash` | Gemini model id |
-| `XAI_API_KEY` | — | Required when `HALO_PROVIDER=xai` |
+| `XAI_API_KEY` | — | Required when `CHIEF_PROVIDER=xai` |
 | `XAI_MODEL` | `grok-2-latest` | xAI model id |
-| `HALO_COST_PER_1K` | `0.0001` | Estimated USD per 1k tokens for `/metrics` |
-| `HALO_DAILY_CALL_CAP` | unset | When set, Halo uses fallbacks after this many LLM calls/day |
+| `CHIEF_COST_PER_1K` | `0.0001` | Estimated USD per 1k tokens for `/metrics` (legacy `HALO_COST_PER_1K` still accepted) |
+| `CHIEF_DAILY_CALL_CAP` | unset | When set, Chief uses fallbacks after this many LLM calls/day (legacy `HALO_DAILY_CALL_CAP` still accepted) |
+| `CHIEF_PORT` | `8000` | Listen port when `PORT` unset (legacy `HALO_PORT` still accepted) |
+| `CHIEF_HOST` | `0.0.0.0` | Desktop bind host (legacy `HALO_HOST` still accepted) |
+| `CHIEF_TRAINING_LEVEL` | `1` | Idle trainer cadence hint (legacy `HALO_TRAINING_LEVEL` still accepted) |
+| `CHIEF_MODEL` | unset | Optional model hint for trainer (legacy `HALO_MODEL` still accepted) |
 | `DATA_DIR` | `backend/` | Directory for `halo.db`, `community.db`, `users.db`, `library.db`; daily copies under `$DATA_DIR/backups/YYYY-MM-DD/` |
 | `OPERATOR_KEY` | unset | Shared secret for booth control. Send as header `X-Operator-Key`. Required in cloud; when unset, `127.0.0.1` may call `/action/*`, `POST /settings`, `/agent/*`, `/sentinel/*` without a key. Dashboard reads the key from `localStorage.operatorKey`. |
 | `YOUTUBE_LIVE_VIDEO_ID` | unset | Optional default YouTube live id (adapters still off until enabled in settings) |
@@ -152,7 +158,7 @@ Boot runs `ops.maybe_daily_backup()`: if `$DATA_DIR/backups/<UTC-day>/.done` is 
 4. Keep `OPERATOR_KEY` / OAuth secrets unchanged across rollbacks unless the deploy that set them is the one you are undoing.
 5. Document the rollback time and SHA in `PROGRESS.md` Notes when you practice it (Alpha checklist: test once).
 
-Switch providers with `HALO_PROVIDER` only — no code change. Viewer memory persists in `$DATA_DIR/halo.db`; room history in `$DATA_DIR/community.db`. Full template: `.env.example`. Alpha ops checklist: `docs/alpha-checklist.md`.
+Switch providers with `CHIEF_PROVIDER` only (legacy `HALO_PROVIDER` still accepted) — no code change. Viewer memory persists in `$DATA_DIR/halo.db`; room history in `$DATA_DIR/community.db`. Full template: `.env.example`. Alpha ops checklist: `docs/alpha-checklist.md`.
 
 ### Platform reality
 

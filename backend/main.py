@@ -17,6 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from auth import COOKIE, require_operator, require_room_mod, set_email_opt_in, user_from_cookie
 from auth import router as auth_router
+from envcompat import env
 from llm import get_provider
 from cohost import CohostAgent
 from community.aggregator import Aggregator
@@ -291,7 +292,7 @@ def lan_ips() -> list[str]:
 
 
 def room_urls() -> dict:
-    port = int(os.getenv("PORT") or os.getenv("HALO_PORT") or "8000")
+    port = int(os.getenv("PORT") or env("PORT") or "8000")
     local = f"http://127.0.0.1:{port}/booth/?tab=room"
     lan = [f"http://{ip}:{port}/booth/?tab=room" for ip in lan_ips()]
     return {"local": local, "lan": lan, "short": f"http://127.0.0.1:{port}/room"}
@@ -1801,5 +1802,5 @@ if os.path.isdir(OVER_DIST):
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.getenv("PORT") or os.getenv("HALO_PORT") or "8000")
+    port = int(os.getenv("PORT") or env("PORT") or "8000")
     uvicorn.run(app, host="0.0.0.0", port=port)

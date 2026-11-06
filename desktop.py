@@ -17,8 +17,15 @@ BACKEND = ROOT / "backend"
 os.chdir(ROOT)
 sys.path.insert(0, str(BACKEND))
 
-PORT = int(os.getenv("PORT") or os.getenv("HALO_PORT") or "8000")
-HOST = os.getenv("HALO_HOST", "0.0.0.0")
+# Cannot import backend.envcompat before sys.path; inline the same CHIEF_ then HALO_ lookup.
+_port = os.getenv("CHIEF_PORT")
+if _port is None:
+    _port = os.getenv("HALO_PORT", "8000")
+PORT = int(os.getenv("PORT") or _port)
+_host = os.getenv("CHIEF_HOST")
+if _host is None:
+    _host = os.getenv("HALO_HOST", "0.0.0.0")
+HOST = _host
 
 
 def wait_up(url: str, timeout: float = 25) -> bool:
@@ -53,6 +60,7 @@ def open_window(url: str):
 def main():
     import uvicorn
 
+    os.environ.setdefault("CHIEF_DESKTOP", "1")
     os.environ.setdefault("HALO_DESKTOP", "1")
     os.chdir(BACKEND)
     config = uvicorn.Config(

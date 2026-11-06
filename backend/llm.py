@@ -1,4 +1,4 @@
-"""LLM providers for Halo — Gemini and xAI, selected by HALO_PROVIDER."""
+"""LLM providers for Halo — Gemini and xAI, selected by CHIEF_PROVIDER (legacy HALO_PROVIDER)."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ import os
 from typing import Optional, Protocol
 
 import requests
+
+from envcompat import env
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +108,10 @@ class XaiProvider:
 
 
 def get_provider(name: Optional[str] = None) -> LLMProvider:
-    """Select provider via HALO_PROVIDER (default gemini)."""
-    provider = (name or os.getenv("HALO_PROVIDER") or "gemini").strip().lower()
+    """Select provider via CHIEF_PROVIDER / legacy HALO_PROVIDER (default gemini)."""
+    provider = (name or env("PROVIDER") or "gemini").strip().lower()
     if provider in {"xai", "grok"}:
         return XaiProvider()
     if provider != "gemini":
-        logger.warning("Unknown HALO_PROVIDER=%r — falling back to gemini.", provider)
+        logger.warning("Unknown CHIEF_PROVIDER/HALO_PROVIDER=%r — falling back to gemini.", provider)
     return GeminiProvider()
