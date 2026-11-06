@@ -2,7 +2,8 @@
   const $=id=>document.getElementById(id), cv=$('c'), ctx=cv.getContext('2d');
   const Q=new URLSearchParams(location.search), A=AudioEngine.A;
   let W=0,H=0, mode='story', cur=null, prev=null, xf=1, flashA=0, lastFlash=-9, uiTimer=0, now=0, last=performance.now()/1000;
-  const opts={safe:true,titles:true,proj:false,debug:Q.get('debug')==='1'};
+  const opts={safe:true,titles:true,proj:false,debug:Q.get('debug')==='1',fx:true,npCard:true,cardstyle:Q.get('cardstyle')||'default'};
+  let songSync=false, hideLock=false;
   const num=(k,d)=>{ const v=parseFloat(Q.get(k)); return isFinite(v)?v:d; };
   $('sceneMin').value=Math.max(0.5,Math.min(15,num('sceneMinutes',4))); $('react').value=Math.max(0,Math.min(3,num('reactivity',1.2))); $('sens').value=num('sens',1);
   if(Q.get('autogain')==='0') $('agc').checked=false;
@@ -49,7 +50,8 @@
     requestAnimationFrame(frame); }
 
   // ---- v2: camera / palette / FX layer applied over every scene ----
-  function composite(dt){ const S=cur, Rk=A.react, prog=S.def.dur<1e9?S.p:(S.t/240)%1, T=now;
+  function composite(dt){ const S=cur, fxMul=opts.fx===false?0:(typeof opts.fx==='number'?opts.fx:1), Rk=A.react*fxMul, prog=S.def.dur<1e9?S.p:(S.t/240)%1, T=now;
+    if(fxMul<=0){ ctx.filter='none'; ctx.drawImage(S.c,0,0); if(prev){ ctx.globalAlpha=1-xf; ctx.drawImage(prev.c,0,0); ctx.globalAlpha=1; } return; }
     if(A.drop){ fx.shock=1; flash(.9); for(let i=0;i<120;i++) fx.sp.push({x:W/2,y:H/2,vx:(Math.random()-.5)*W*1.2,vy:(Math.random()-.5)*H*1.2,l:1,h:Math.random()*360}); }
     fx.shock*=Math.pow(.25,dt);
     // slow drift that evolves across the whole scene (direction changes every sub-phase)
@@ -92,7 +94,7 @@
     ctx.fillStyle='#cfe'; ctx.fillText(`build ${(A.buildup*100|0)}%  flux ${A.flux.toFixed(2)}  gain ${A.gain.toFixed(1)}x  ${fx.shock>.1?'DROP!':''}`,x0+10*s,y0+158*s); ctx.restore(); }
 
   // UI wiring
-  const poke=()=>{ uiTimer=0; if(!hideLock) $('ui').classList.remove('off'); }; let hideLock=false;
+  const poke=()=>{ uiTimer=0; if(!hideLock) $('ui').classList.remove('off'); };
   addEventListener('mousemove',poke);
   $('mode').onchange=e=>setMode(e.target.value); $('scene').onchange=e=>{ const v=e.target.value; v==='R'?setMode('rando'):(mode==='rando'&&setMode('story'),go(+v)); };
   $('prev').onclick=()=>go(nextIdx(-1)); $('next').onclick=()=>go(nextIdx(1));
@@ -101,6 +103,45 @@
   $('safe').onchange=e=>opts.safe=e.target.checked; $('titles').onchange=e=>opts.titles=e.target.checked;
   $('proj').onchange=e=>{ opts.proj=e.target.checked; cv.style.filter=opts.proj?'contrast(1.7) saturate(1.5) brightness(.85)':''; };
   const status=s=>$('status').textContent=s;
+
+  // Optional BPM/energy scene pick used when songSync + track has bpm/energy:
+  // bpm<110|energy<=2 → calm (STORY_ORDER 0–6); 110–132|3–6 → mid; else peak.
+  function sceneFromTrack(track){
+    if(!track) return null;
+    const bpm=track.bpm!=null?+track.bpm:null, energy=track.energy!=null?+track.energy:null;
+    let band=1;
+    if((bpm!=null&&bpm<110)||(energy!=null&&energy<=2)) band=0;
+    else if((bpm!=null&&bpm>132)||(energy!=null&&energy>=7)) band=2;
+    const n=STORY_ORDER.length, a=Math.floor(n/3), ranges=[[0,a],[a,2*a],[2*a,n]];
+    const [lo,hi]=ranges[band];
+    return STORY_ORDER[lo+((Math.random()*(hi-lo))|0)];
+  }
+  function resetAct(){ if(cur){ cur.t=0; cur.p=0; cur.act=0; cur.ap=0; cur.phase=0; } }
+  function applyRemote(msg){
+    if(!msg||typeof msg!=='object') return;
+    if(msg.mode!=null) setMode(String(msg.mode));
+    if(msg.scene!=null){ const v=msg.scene; if(v==='R'||v==='r') setMode('rando'); else { if(mode==='rando') setMode('story'); go(+v); } }
+    if(msg.pickByBpm&&msg.track){ const p=sceneFromTrack(msg.track); if(p!=null){ if(mode!=='story') setMode('story'); go(p); } }
+    else if(msg.next) go(nextIdx(1));
+    if(msg.prev) go(nextIdx(-1));
+    if(msg.reactivity!=null) $('react').value=Math.max(0,Math.min(3,+msg.reactivity));
+    if(msg.sens!=null) $('sens').value=Math.max(0.3,Math.min(3,+msg.sens));
+    if(msg.sceneMinutes!=null) $('sceneMin').value=Math.max(0.5,Math.min(15,+msg.sceneMinutes));
+    if(msg.autogain!=null) $('agc').checked=!!msg.autogain;
+    if(msg.fx!=null) opts.fx=msg.fx;
+    if(msg.projection!=null){ $('proj').checked=!!msg.projection; $('proj').onchange({target:$('proj')}); }
+    if(msg.strobeSafe!=null){ opts.safe=!!msg.strobeSafe; $('safe').checked=opts.safe; }
+    if(msg.titleCards!=null){ opts.titles=!!msg.titleCards; $('titles').checked=opts.titles; }
+    if(msg.nowPlayingCard!=null) opts.npCard=!!msg.nowPlayingCard;
+    if(msg.cardstyle!=null) opts.cardstyle=String(msg.cardstyle);
+    if(msg.debug!=null) opts.debug=!!msg.debug;
+    if(msg.ui!=null){ hideLock=!msg.ui; $('ui').classList.toggle('off',hideLock); }
+    if(msg.songSync!=null) songSync=!!msg.songSync;
+    if(msg.resetAct) resetAct();
+    poke();
+  }
+  // songSync advances come from /ws/visualizer (backend track_change → vis_cmd).
+  // sceneFromTrack remains available for optional BPM pick if a cmd includes pickByBpm.
   async function fillDevices(){ const d=await AudioEngine.listDevices(), sel=$('dev'), v=sel.value; sel.length=1; d.forEach((x,i)=>{ const o=document.createElement('option'); o.value=x.deviceId; o.textContent=x.label||`Input ${i+1}`; sel.appendChild(o); }); sel.value=v; }
   fillDevices(); navigator.mediaDevices&&navigator.mediaDevices.addEventListener&&navigator.mediaDevices.addEventListener('devicechange',fillDevices);
   $('mic').onclick=async()=>{ try{ await AudioEngine.useInput($('dev').value); status('live input ✓'); fillDevices(); }catch(e){ status('input error: '+e.message); } };
@@ -125,6 +166,11 @@
   if(Q.get('t')){ const T=+Q.get('t'), dt=1/30; for(let i=0;i<T/dt && i<9000;i++){ now+=dt; AudioEngine.update(dt,now); step(cur,dt); } }
   if(Q.get('demo')) $('demo').onclick();
   requestAnimationFrame(frame);
-  window.__vis={get cur(){return cur;}, go, setMode, A, opts};
+  window.__vis={
+    get cur(){return cur;}, go, setMode, applyRemote, resetAct, A, opts,
+    getMode:()=>mode, get songSync(){return songSync;}, set songSync(v){songSync=!!v;},
+  };
 })();
-setInterval(()=>{ const e=document.getElementById('smv'); e.textContent=document.getElementById('sceneMin').value+' min'; const k=document.getElementById('kick'); k.style.color=AudioEngine.A.kickEnv>.3?'#f80':'#333'; },100);
+setInterval(()=>{ const e=document.getElementById('smv'); e.textContent=document.getElementById('sceneMin').value+' min'; const k=document.getElementById('kick'); k.style.color=AudioEngine.A.kickEnv>.3?'#f80':'#333';
+  const b=document.getElementById('badge'); if(b&&window.__vis&&window.__vis.opts) b.style.display=window.__vis.opts.npCard===false?'none':'';
+},100);

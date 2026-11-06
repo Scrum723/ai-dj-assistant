@@ -38,6 +38,7 @@ from community.store import CommunityStore, DEFAULT_RETENTION_DAYS
 from dj_controller import DJController, MIDI_MAP
 from mixer import Mixer
 from nowplaying import NowPlaying
+from visualizer_ctl import vis_ctl
 from ops import (
     allow_ip,
     check_adapter_down_alerts,
@@ -386,6 +387,14 @@ def publish_nowplaying(track: dict) -> None:
     msg = {"type": "nowplaying", "payload": payload}
     broadcast(msg)
     room_broadcast(msg)
+
+    # V4 song-sync: when enabled, advance visualizer scene on track_change
+    try:
+        sync_patch = vis_ctl.song_sync_patch(payload)
+        if sync_patch:
+            _schedule(vis_ctl.broadcast(vis_ctl.cmd_message(sync_patch)))
+    except Exception:
+        logger.exception("visualizer songSync broadcast failed")
 
     async def _fanout() -> None:
         dead: list[asyncio.Queue] = []
@@ -1589,6 +1598,27 @@ async def nowplaying_stream():
     )
 
 
+# --- Visualizer remote control (V4) ---------------------------------------
+
+
+@app.get("/api/visualizer")
+def get_visualizer_state():
+    """Current remote-control state + connected client count (+ last vis_status)."""
+    return vis_ctl.snapshot()
+
+
+@app.post("/api/visualizer")
+def post_visualizer_cmd(body: dict, _auth: None = Depends(require_operator)):
+    """Operator command → persist state and broadcast vis_cmd on /ws/visualizer."""
+    try:
+        patch = vis_ctl.apply(body or {})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    msg = vis_ctl.cmd_message(patch)
+    _schedule(vis_ctl.broadcast(msg))
+    return {"ok": True, "cmd": msg, **vis_ctl.snapshot()}
+
+
 @app.get("/healthz")
 def healthz():
     """Railway / cloud health — always 200; midi may be false without mido."""
@@ -1944,6 +1974,31 @@ async def room_websocket(ws: WebSocket):
     except WebSocketDisconnect:
         room_hub.disconnect(ws)
         room_broadcast({"type": "presence", "payload": presence_payload()})
+
+
+@app.websocket("/ws/visualizer")
+async def visualizer_websocket(ws: WebSocket):
+    """Visualizer page: receive vis_cmd; report vis_status. Never audio upstream."""
+    await vis_ctl.connect(ws)
+    try:
+        while True:
+            raw = await ws.receive_text()
+            try:
+                data = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if data.get("type") == "vis_status":
+                # Drop any accidental audio blobs
+                data.pop("audio", None)
+                data.pop("samples", None)
+                data.pop("fft", None)
+                vis_ctl.note_status(data)
+    except WebSocketDisconnect:
+        vis_ctl.disconnect(ws)
+    except Exception:
+        vis_ctl.disconnect(ws)
 
 
 if os.path.isdir(DASH_DIST):
