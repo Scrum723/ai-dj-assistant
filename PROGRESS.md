@@ -102,7 +102,7 @@ Branch: `feature/chief-visualizer` (worktree; not pushed). Base: `origin/main` @
 
 Automated:
 - [x] New-phase pytest files green (84 passed): r0/r1/r2/r3/r4 + v1/v2/v3/v4/v7
-- [ ] Full `python3 -m pytest -q` — deferred on Windows (known hangs: c1_midi, kill_auth, b3_identity, c3_selector)
+- [x] Full `python3 -m pytest -q` — 318 passed, 2 skipped (after snapshot/status recursion fix)
 - [x] `npm run build` in frontend-dashboard/ and backend/frontend-overlay/
 - [x] Cloud-style smoke (TestClient + PYTHONPATH=backend): `/healthz` 200 with nowplaying+visualizer; `/visualizer/` 200; `/api/nowplaying` `{}`
 - [x] Rename audit performed in R5 (remaining halo hits on Appendix A KEEP list)
