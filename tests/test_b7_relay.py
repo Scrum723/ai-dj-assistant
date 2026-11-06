@@ -70,9 +70,10 @@ def clock():
 
 def test_format_room_and_halo():
     room = _msg("room", "1", "Alice", "hi there")
-    halo = _msg("halo", "2", "Halo", "Thanks Alice!")
+    halo = _msg("halo", "2", "Chief", "Thanks Alice!")
     assert format_relay_text(room) == "[room] Alice: hi there"
-    assert format_relay_text(halo) == "Thanks Alice!"
+    assert format_relay_text(halo) == "Chief: Thanks Alice!"
+    assert format_relay_text(_msg("halo", "3", "", "yo"), cohost="Chief") == "Chief: yo"
 
 
 def test_off_by_default_rule_matrix(clock):
@@ -100,8 +101,8 @@ def test_off_by_default_rule_matrix(clock):
     assert kick.sent == []
     assert fb.sent == ["[room] Bob: hello"]
 
-    assert relay.handle(_msg("halo", "h1", "Halo", "yo")) == ["kick"]
-    assert kick.sent == ["yo"]
+    assert relay.handle(_msg("halo", "h1", "Chief", "yo")) == ["kick"]
+    assert kick.sent == ["Chief: yo"]
     assert len(fb.sent) == 1
 
 
