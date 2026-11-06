@@ -48,7 +48,7 @@ def test_start_npm_uses_backend_frontend_overlay(tmp_path, monkeypatch):
 
     monkeypatch.setattr(start, "run", fake_run)
     monkeypatch.setattr(start.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
-    monkeypatch.setattr(start.os, "execv", lambda path, args: None)
+    monkeypatch.setattr(start, "launch_desktop", lambda *a, **k: None)
     monkeypatch.setattr(start.os, "chdir", lambda path: None)
 
     start.main()
@@ -86,7 +86,7 @@ def test_start_prefers_root_frontend_overlay_when_present(tmp_path, monkeypatch)
 
     monkeypatch.setattr(start, "run", fake_run)
     monkeypatch.setattr(start.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
-    monkeypatch.setattr(start.os, "execv", lambda path, args: None)
+    monkeypatch.setattr(start, "launch_desktop", lambda *a, **k: None)
     monkeypatch.setattr(start.os, "chdir", lambda path: None)
 
     start.main()
