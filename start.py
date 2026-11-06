@@ -10,8 +10,12 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-VENV_PY = ROOT / ".venv" / "bin" / "python"
-VENV_PIP = ROOT / ".venv" / "bin" / "pip"
+# Windows uses Scripts/; macOS/Linux use bin/
+_VENV_BIN = ROOT / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+_VENV_PY_NAME = "python.exe" if os.name == "nt" else "python"
+_VENV_PIP_NAME = "pip.exe" if os.name == "nt" else "pip"
+VENV_PY = _VENV_BIN / _VENV_PY_NAME
+VENV_PIP = _VENV_BIN / _VENV_PIP_NAME
 
 
 def run(cmd, **kwargs):
@@ -19,10 +23,22 @@ def run(cmd, **kwargs):
     subprocess.check_call(cmd, **kwargs)
 
 
+def launch_desktop(venv_py: Path, desktop: Path) -> None:
+    """Hand off to desktop.py. Windows uses subprocess so Ctrl+C works; Unix uses execv."""
+    if os.name == "nt":
+        raise SystemExit(subprocess.call([str(venv_py), str(desktop)]))
+    os.execv(str(venv_py), [str(venv_py), str(desktop)])
+
+
 def main():
     os.chdir(ROOT)
+    # On Windows / CI without Core MIDI, prefer the sim backend unless already set.
+    if os.name == "nt":
+        os.environ.setdefault("DJ_BACKEND", "sim")
+        os.environ.setdefault("COOKIE_SECURE", "false")
     if not VENV_PY.exists():
         run([sys.executable, "-m", "venv", str(ROOT / ".venv")])
+    # Prefer requirements-local.txt when present (local/desktop deps); else requirements.txt.
     req = ROOT / "requirements-local.txt"
     if not req.exists():
         req = ROOT / "requirements.txt"
@@ -30,11 +46,14 @@ def main():
     npm = shutil.which("npm")
     if not npm:
         raise SystemExit("npm not found. Install Node.js, then re-run.")
+    overlay = ROOT / "frontend-overlay"
+    if not overlay.exists():
+        overlay = ROOT / "backend" / "frontend-overlay"
     run([npm, "install"], cwd=ROOT / "frontend-dashboard")
     run([npm, "run", "build"], cwd=ROOT / "frontend-dashboard")
-    run([npm, "install"], cwd=ROOT / "frontend-overlay")
-    run([npm, "run", "build"], cwd=ROOT / "frontend-overlay")
-    os.execv(str(VENV_PY), [str(VENV_PY), str(ROOT / "desktop.py")])
+    run([npm, "install"], cwd=overlay)
+    run([npm, "run", "build"], cwd=overlay)
+    launch_desktop(VENV_PY, ROOT / "desktop.py")
 
 
 if __name__ == "__main__":

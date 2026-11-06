@@ -1,4 +1,4 @@
-"""Recurring Halo segments: roll call, request hour, guess BPM, track ID, last call."""
+"""Recurring Chief (formerly Halo) segments: roll call, request hour, guess BPM, track ID, last call."""
 
 from __future__ import annotations
 
@@ -29,8 +29,9 @@ SEGMENT_LINES: dict[str, list[str]] = {
         "BPM quiz: drop a number in chat for the track spinning now.",
     ],
     "track_id": [
-        "Track ID — that was {title}.",
-        "Just transitioned into {title}.",
+        "Now playing: {title} — {artist}.",
+        "Track ID — {title} by {artist}.",
+        "Just transitioned into {title} — {artist}.",
     ],
     "last_call": [
         "Last call for requests this hour — get them in now.",
@@ -178,10 +179,13 @@ class SegmentScheduler:
         configs: list[dict[str, Any]],
         *,
         title: str,
+        artist: Optional[str] = None,
+        bpm: Optional[float] = None,
+        key: Optional[str] = None,
         dj_mode: bool = False,
         now: Optional[float] = None,
     ) -> Optional[SegmentEvent]:
-        """Announce track ID after a mix transition."""
+        """Announce track ID after a mix transition (real now-playing fields)."""
         now = float(self._clock() if now is None else now)
         cfg = next((c for c in configs if c.get("name") == "track_id"), None)
         if cfg is None:
@@ -190,8 +194,15 @@ class SegmentScheduler:
             return None
         if dj_mode and not cfg.get("dj_mode_ok", True):
             return None
-        line = self._pick_line("track_id", title=title or "the next track")
-        return self._activate("track_id", line, now, title=title)
+        art = (artist or "").strip() or "unknown"
+        tit = (title or "").strip() or "the next track"
+        line = self._pick_line("track_id", title=tit, artist=art)
+        meta: dict[str, Any] = {"title": tit, "artist": art}
+        if bpm is not None:
+            meta["bpm"] = bpm
+        if key:
+            meta["key"] = key
+        return self._activate("track_id", line, now, **meta)
 
     def status(self) -> dict[str, Any]:
         cur = self.current

@@ -1,5 +1,7 @@
 # DJ Bot Botty — Alpha Progress
 
+Chief was previously called Halo; legacy `HALO_*` env vars, `!halo` commands, `halo.db` and settings key `halo` still work. Historical phase titles below still say Halo.
+
 Branch: `alpha/a1-d1`
 Spec: `docs/djbotbotty_full_build_prompt.md`
 
@@ -63,7 +65,7 @@ Concrete setup checklist (no credentials invented here — create these when rea
 - [ ] Controller + audio loopback (e.g. BlackHole) for takeover/silence watchdog (C5)
 
 ### Alpha dress rehearsal (D1)
-- [ ] Multistream with merged room, Halo, OBS overlay, kill switch
+- [ ] Multistream with merged room, Chief, OBS overlay, kill switch
 - [ ] Review/extend `settings.moderation.blocklist` on a live show
 - [ ] Booth-pass link across ≥2 platforms after OAuth apps exist
 - [ ] Enable one official adapter + one relay send with real tokens
@@ -76,3 +78,54 @@ Concrete setup checklist (no credentials invented here — create these when rea
 - B4 docs (2026-10-24): Kick webhook RSA over messageId.timestamp.body (docs.kick.com/events/webhook-security); Facebook Graph v26 live-video comments; Rumble livestream API JSON (support article 2025-11-20); YT liveChatMessages.list quota 5/call + pollingIntervalMillis. Dead adapters isolated; Charles tokens logged as blockers.
 - B5 docs (2026-10-24): TikTokLive optional (unofficial webcast; no official LIVE chat API); X recent search conversation_id/quoted_tweet_id (docs.x.com rate limits). Both off by default; auto-disable after 5 failures / 10 min + operator alert.
 - Session restart mid-A6: WIP stashed as `wip/a6-shoutouts`; setup gate (env/docs/blockers/gitignore) runs before restoring A6.
+
+## Chief + Visualizer build
+
+Branch: `feature/chief-visualizer` (worktree; not pushed). Base: `origin/main` @ c902a73.
+
+- [x] R0 — Launcher overlay path fix — 4519dc8 overlay fallback to backend/frontend-overlay
+- [x] R1 — Name source of truth + settings migration — cbb94fb Chief default + chief alias + migration
+- [x] R2 — Co-host brain — a21bbc8 cohost_name + !chief aliases
+- [x] R3 — relay names — 98a6c51
+- [x] R4 — envcompat — c24b13a
+- [x] R5 — Frontends, desktop app, docs — a792740
+- [x] V0 — vendored visualizer-v2 — aac6f98 (no nowplaying.js in v2)
+- [x] V1 — Now Playing service (core module) — 4e5e654
+- [x] V2 — nowplaying API/SSE/WS — cb344ba; flake harden 18d10a6
+- [x] V3 — Chief track awareness — 3b68da3
+- [x] V4 — Visualizer remote control (websocket) — 9145d05
+- [x] V5 — Dashboard visualizer panel — 6c48ae1
+- [x] V6 — OBS/Restream docs — 3401def
+- [x] V7 — Health + metrics — 7b6cc8c
+
+### Test checklist (section 6)
+
+Automated:
+- [x] New-phase pytest files green (84 passed): r0/r1/r2/r3/r4 + v1/v2/v3/v4/v7
+- [x] Full `python3 -m pytest -q` — 318 passed, 2 skipped (after snapshot/status recursion fix)
+- [x] `npm run build` in frontend-dashboard/ and backend/frontend-overlay/
+- [x] Cloud-style smoke (TestClient + PYTHONPATH=backend): `/healthz` 200 with nowplaying+visualizer; `/visualizer/` 200; `/api/nowplaying` `{}`
+- [x] Rename audit performed in R5 (remaining halo hits on Appendix A KEEP list)
+- [x] Old Halo name migration + custom-name preserve covered by R1 tests
+- [x] HALO_PORT / CHIEF_PORT covered by R4 tests
+
+Manual on Charles's Mac: still open (see Blocked on Charles).
+
+### Blocked on Charles
+- [ ] Supply visualizer-v3 (or confirm v2 is final) and optional `now_playing_bridge.py` / What's Now Playing URL
+- [ ] Configure What's Now Playing for rekordbox/djay; confirm `/v1/last` fields
+- [ ] Confirm DJ controller/audio device label in Chrome
+- [ ] OBS Window Capture vs Browser Source + Restream Chrome share at 1080p
+- [ ] Approve announcement wording + default gap; TTS on/off
+- [ ] Bundle id stay `com.docweather.halodj` vs change
+- [ ] Verify MIDI port `AI_DJ_Virtual_Port` still maps after upgrade
+- [ ] Live <200ms dashboard → visualizer slider check
+- [ ] `python3 start.py` / `./make_app.sh` → Chief.app on Mac
+
+### Notes / deviations
+- Started from origin/main @ c902a73 on branch feature/chief-visualizer
+- Ruling: work on feature/chief-visualizer off origin/main (not alpha/a1-d1) — plan checked against main
+- V0: used Downloads visualizer-v2 (no v3 on disk); V2 added minimal js/nowplaying.js (SSE + poll)
+- R3: Halo relay format became Name: text — kept as intentional
+- R1: first implementer hung on full pytest; controller finished focused tests + commit
+- Branch left local only (no push/PR) per Charles

@@ -1,5 +1,7 @@
 """Alpha ops helpers: JSON logs, IP rate limits, sqlite backup, adapter-down watch."""
 
+# Chief (formerly Halo) — keep halo.db / halo_training.jsonl paths.
+
 from __future__ import annotations
 
 import json
@@ -149,6 +151,7 @@ def sqlite_paths() -> list[Path]:
         "halo_training.jsonl",
         "dj_actions.jsonl",
         "sentinel_incidents.jsonl",
+        "nowplaying.jsonl",
     )
     return [base / n for n in names]
 

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import socket
@@ -10,13 +11,14 @@ from typing import Any, Optional
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from auth import COOKIE, require_operator, require_room_mod, set_email_opt_in, user_from_cookie
 from auth import router as auth_router
+from envcompat import env
 from llm import get_provider
 from cohost import CohostAgent
 from community.aggregator import Aggregator
@@ -35,6 +37,8 @@ from community.schema import ChatMessage, ChatUser
 from community.store import CommunityStore, DEFAULT_RETENTION_DAYS
 from dj_controller import DJController, MIDI_MAP
 from mixer import Mixer
+from nowplaying import NowPlaying
+from visualizer_ctl import vis_ctl
 from ops import (
     allow_ip,
     check_adapter_down_alerts,
@@ -49,6 +53,7 @@ from selector import pick as selector_pick
 from selector import plan_names as selector_plan_names
 from sentinel import is_killed
 from sentinel import router as sentinel_router
+from settings import _deep_merge
 from settings import load as load_settings
 from settings import public_settings, save as save_settings
 from trainer import idle_trainer
@@ -82,11 +87,14 @@ aggregator: Optional[Aggregator] = None
 community_store: Optional[CommunityStore] = None
 community_mod: Optional[CommunityMod] = None
 community_relay: Optional[CommunityRelay] = None
+nowplaying_svc = None  # set in lifespan (NowPlaying)
 speech_queue: asyncio.Queue
 agent_task: Optional[asyncio.Task] = None
 speech_task: Optional[asyncio.Task] = None
 presence_task: Optional[asyncio.Task] = None
+nowplaying_task: Optional[asyncio.Task] = None
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
+_nowplaying_sse_queues: list[asyncio.Queue] = []
 
 
 class Hub:
@@ -290,7 +298,7 @@ def lan_ips() -> list[str]:
 
 
 def room_urls() -> dict:
-    port = int(os.getenv("PORT") or os.getenv("HALO_PORT") or "8000")
+    port = int(os.getenv("PORT") or env("PORT") or "8000")
     local = f"http://127.0.0.1:{port}/booth/?tab=room"
     lan = [f"http://{ip}:{port}/booth/?tab=room" for ip in lan_ips()]
     return {"local": local, "lan": lan, "short": f"http://127.0.0.1:{port}/room"}
@@ -373,13 +381,45 @@ def publish_highlight(payload: dict):
     room_broadcast(msg)
 
 
+def publish_nowplaying(track: dict) -> None:
+    """Fan out track_change to /ws, /ws/room, and SSE subscribers."""
+    payload = dict(track) if track else {}
+    msg = {"type": "nowplaying", "payload": payload}
+    broadcast(msg)
+    room_broadcast(msg)
+
+    # V4 song-sync: when enabled, advance visualizer scene on track_change
+    try:
+        sync_patch = vis_ctl.song_sync_patch(payload)
+        if sync_patch:
+            _schedule(vis_ctl.broadcast(vis_ctl.cmd_message(sync_patch)))
+    except Exception:
+        logger.exception("visualizer songSync broadcast failed")
+
+    async def _fanout() -> None:
+        dead: list[asyncio.Queue] = []
+        for q in list(_nowplaying_sse_queues):
+            try:
+                q.put_nowait({"event": "track_change", "data": payload})
+            except Exception:
+                dead.append(q)
+        for q in dead:
+            try:
+                _nowplaying_sse_queues.remove(q)
+            except ValueError:
+                pass
+
+    _schedule(_fanout())
+
+
 def emit_speak(text: str, target: Optional[str] = None, mood: str = "talk", audio_url: Optional[str] = None):
     state["speak_id"] += 1
     state["speak_text"] = text
     state["speak_target"] = target
     state["speak_mood"] = mood
     state["speak_audio"] = audio_url
-    push_log(f"Halo: {text}")
+    cohost_name = (load_settings().get("halo") or {}).get("name") or "Chief"
+    push_log(f"{cohost_name}: {text}")
     publish_state()
     broadcast(
         {
@@ -512,7 +552,7 @@ async def presence_worker():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, aggregator, community_store, community_mod, speech_queue, agent_task, speech_task, presence_task, _main_loop
+    global agent, aggregator, community_store, community_mod, speech_queue, agent_task, speech_task, presence_task, nowplaying_svc, nowplaying_task, _main_loop
     _main_loop = asyncio.get_running_loop()
     try:
         maybe_daily_backup()
@@ -745,6 +785,21 @@ async def lifespan(app: FastAPI):
     if tracks and not state["current_track"]:
         state["current_track"] = tracks[0]
 
+    # Now Playing poll loop (V1) — cloud-safe sources, never crash
+    try:
+        nowplaying_svc = NowPlaying.from_settings(
+            cfg,
+            get_internal_track=lambda: state.get("current_track"),
+            library_db=DB_PATH,
+        )
+        nowplaying_svc.on_track_change(publish_nowplaying)
+        nowplaying_svc.on_track_change(agent.on_track_change)
+        nowplaying_task = asyncio.create_task(nowplaying_svc.run_poll_loop())
+    except Exception:
+        logger.exception("nowplaying service failed to start")
+        nowplaying_svc = None
+        nowplaying_task = None
+
     # Optional MIDI input (Mac controller); no-op if port unset / mido missing
     midi_in = ((cfg.get("dj") or {}).get("midi_in_port") or os.getenv("DJ_MIDI_IN_PORT") or "").strip()
     if midi_in:
@@ -788,11 +843,24 @@ async def lifespan(app: FastAPI):
     yield
     trainer_stop.set()
     dj.stop_midi_input()
+    if nowplaying_svc:
+        try:
+            nowplaying_svc.stop()
+        except Exception:
+            pass
     if aggregator:
         aggregator.stop()
     if agent:
         agent.stop()
-    for task in (agent_task, speech_task, trainer_task, presence_task, watchdog_task, adapter_health_task):
+    for task in (
+        agent_task,
+        speech_task,
+        trainer_task,
+        presence_task,
+        watchdog_task,
+        adapter_health_task,
+        nowplaying_task,
+    ):
         if task:
             task.cancel()
 
@@ -920,8 +988,19 @@ class DjModeRequest(BaseModel):
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 DASH_DIST = os.path.join(ROOT_DIR, "frontend-dashboard", "dist")
 OVER_DIST = os.path.join(ROOT_DIR, "frontend-overlay", "dist")
+VIS_DIR = os.path.join(os.path.dirname(__file__), "visualizer")
 if not os.path.isdir(OVER_DIST):
     OVER_DIST = os.path.join(ROOT_DIR, "backend", "frontend-overlay", "dist")
+
+
+class _NoStoreIndexStaticFiles(StaticFiles):
+    """Serve static files; never cache index.html so visualizer updates show up."""
+
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if path in ("", "index.html") or getattr(resp, "media_type", None) == "text/html":
+            resp.headers["Cache-Control"] = "no-store"
+        return resp
 
 
 @app.get("/room")
@@ -936,7 +1015,7 @@ def read_root():
     return {
         "status": "DJ Bot Botty is online.",
         "product": "DJ Bot Botty",
-        "cohost": (load_settings().get("halo") or {}).get("name") or "Halo",
+        "cohost": (load_settings().get("halo") or {}).get("name") or "Chief",
         "midi_connected": dj.connected,
         "dashboard": "http://127.0.0.1:5173",
         "overlay": "http://127.0.0.1:5174",
@@ -953,6 +1032,11 @@ def get_settings_route():
 @app.post("/settings")
 def update_settings_route(patch: dict, _auth: None = Depends(require_operator)):
     current = load_settings()
+    # Alias: clients may send `chief`; fold into `halo` before secret handling/save.
+    chief_patch = patch.pop("chief", None) if isinstance(patch, dict) else None
+    if isinstance(chief_patch, dict):
+        existing = patch.get("halo") if isinstance(patch.get("halo"), dict) else {}
+        patch["halo"] = _deep_merge(chief_patch, existing)
     halo_patch = patch.get("halo") if isinstance(patch.get("halo"), dict) else None
     if halo_patch is not None:
         halo_patch.pop("elevenlabs_key_set", None)
@@ -1428,6 +1512,113 @@ def shows_next():
     return next_show_payload()
 
 
+# --- Now Playing API (V2) -------------------------------------------------
+# Dual paths: /api/* for visualizer + built booth; bare /* for Vite dev proxy
+# (frontend-dashboard strips /api) and the old bridge alias GET /nowplaying.
+
+
+def _nowplaying_state() -> dict:
+    if not nowplaying_svc:
+        return {}
+    return nowplaying_svc.state() or {}
+
+
+@app.get("/api/nowplaying")
+@app.get("/nowplaying")
+def get_nowplaying():
+    """Public current track JSON (compatible with visualizer js/nowplaying.js norm())."""
+    return _nowplaying_state()
+
+
+@app.get("/api/nowplaying/history")
+@app.get("/nowplaying/history")
+def get_nowplaying_history():
+    """Last 20 played tracks (memory + $DATA_DIR/nowplaying.jsonl)."""
+    if not nowplaying_svc:
+        return {"tracks": []}
+    return {"tracks": nowplaying_svc.history(20)}
+
+
+@app.post("/api/nowplaying")
+@app.post("/nowplaying")
+def post_nowplaying(body: dict, _auth: None = Depends(require_operator)):
+    """Operator manual set — commits immediately and broadcasts."""
+    if not nowplaying_svc:
+        raise HTTPException(status_code=503, detail="nowplaying unavailable")
+    track = nowplaying_svc.apply_manual_now(body or {})
+    if not track:
+        raise HTTPException(status_code=400, detail="invalid track payload")
+    return track
+
+
+@app.delete("/api/nowplaying")
+@app.delete("/nowplaying")
+def delete_nowplaying(_auth: None = Depends(require_operator)):
+    """Operator clear of manual override (and current if it was manual)."""
+    if not nowplaying_svc:
+        raise HTTPException(status_code=503, detail="nowplaying unavailable")
+    nowplaying_svc.clear_manual(clear_current=True)
+    return _nowplaying_state()
+
+
+@app.get("/api/nowplaying/stream")
+@app.get("/nowplaying/stream")
+async def nowplaying_stream():
+    """SSE: track_change events + heartbeat every 15s."""
+    queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+    _nowplaying_sse_queues.append(queue)
+
+    async def event_gen():
+        try:
+            # snapshot so clients don't wait for the next change
+            cur = _nowplaying_state()
+            yield f"event: track_change\ndata: {json.dumps(cur)}\n\n"
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    ev = item.get("event") or "track_change"
+                    data = item.get("data") if "data" in item else item
+                    yield f"event: {ev}\ndata: {json.dumps(data)}\n\n"
+                except asyncio.TimeoutError:
+                    yield "event: heartbeat\ndata: {}\n\n"
+        finally:
+            try:
+                _nowplaying_sse_queues.remove(queue)
+            except ValueError:
+                pass
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# --- Visualizer remote control (V4) ---------------------------------------
+
+
+@app.get("/api/visualizer")
+def get_visualizer_state():
+    """Current remote-control state + connected client count (+ last vis_status)."""
+    return vis_ctl.snapshot()
+
+
+@app.post("/api/visualizer")
+def post_visualizer_cmd(body: dict, _auth: None = Depends(require_operator)):
+    """Operator command → persist state and broadcast vis_cmd on /ws/visualizer."""
+    try:
+        patch = vis_ctl.apply(body or {})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    msg = vis_ctl.cmd_message(patch)
+    _schedule(vis_ctl.broadcast(msg))
+    return {"ok": True, "cmd": msg, **vis_ctl.snapshot()}
+
+
 @app.get("/healthz")
 def healthz():
     """Railway / cloud health — always 200; midi may be false without mido."""
@@ -1446,11 +1637,27 @@ def healthz():
             adapters = (aggregator.status() or {}).get("adapters") or {}
         except Exception:
             adapters = {}
+    if nowplaying_svc:
+        try:
+            np_health = nowplaying_svc.health()
+        except Exception:
+            np_health = {"source": None, "ok": False, "last_change_age": None}
+    else:
+        np_health = {"source": None, "ok": False, "last_change_age": None}
+    try:
+        vis_clients = int(vis_ctl.snapshot().get("clients") or 0)
+    except Exception:
+        vis_clients = 0
     return {
         "ok": True,
         "midi": midi_ok,
         "llm": llm_ok,
         "adapters": adapters,
+        "nowplaying": np_health,
+        "visualizer": {
+            "served": bool(os.path.isdir(VIS_DIR)),
+            "clients": vis_clients,
+        },
     }
 
 
@@ -1500,6 +1707,8 @@ def halo_metrics(_auth: None = Depends(require_operator)):
             "p95_ms": 0,
             "est_cost_usd": 0.0,
             "tokens_est": 0,
+            "announce_count": 0,
+            "track_id_answers": 0,
         }
     return agent.metrics()
 
@@ -1785,14 +1994,45 @@ async def room_websocket(ws: WebSocket):
         room_broadcast({"type": "presence", "payload": presence_payload()})
 
 
+@app.websocket("/ws/visualizer")
+async def visualizer_websocket(ws: WebSocket):
+    """Visualizer page: receive vis_cmd; report vis_status. Never audio upstream."""
+    await vis_ctl.connect(ws)
+    try:
+        while True:
+            raw = await ws.receive_text()
+            try:
+                data = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(data, dict):
+                continue
+            if data.get("type") == "vis_status":
+                # Drop any accidental audio blobs
+                data.pop("audio", None)
+                data.pop("samples", None)
+                data.pop("fft", None)
+                vis_ctl.note_status(data)
+    except WebSocketDisconnect:
+        vis_ctl.disconnect(ws)
+    except Exception:
+        vis_ctl.disconnect(ws)
+
+
 if os.path.isdir(DASH_DIST):
     app.mount("/booth", StaticFiles(directory=DASH_DIST, html=True), name="booth")
 if os.path.isdir(OVER_DIST):
     app.mount("/overlay", StaticFiles(directory=OVER_DIST, html=True), name="overlay")
+if os.path.isdir(VIS_DIR):
+    app.mount(
+        "/visualizer",
+        _NoStoreIndexStaticFiles(directory=VIS_DIR, html=True),
+        name="visualizer",
+    )
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.getenv("PORT") or os.getenv("HALO_PORT") or "8000")
+    port = int(os.getenv("PORT") or env("PORT") or "8000")
     uvicorn.run(app, host="0.0.0.0", port=port)

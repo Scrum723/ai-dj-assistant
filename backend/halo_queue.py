@@ -1,4 +1,6 @@
-"""Priority queue for Halo replies — operator > safety > supporter > … > idle."""
+"""Priority queue for Chief (formerly Halo) replies — operator > safety > supporter > … > idle."""
+
+# Chief (formerly Halo) — keep HaloTask / internal ids.
 
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ DEFAULT_PRIORITIES = {
     "supporter": 2,
     "request": 3,
     "mention": 4,
+    "track_id": 4,  # !song / what's playing — cheap, no LLM
     "first_timer": 5,
     "regular": 6,
     "idle": 9,
@@ -120,6 +123,8 @@ class PriorityQueue:
             "chat": "regular",
             "mod": "safety",
             "moderation": "safety",
+            "song": "track_id",
+            "now_playing": "track_id",
         }
         mapped = aliases.get(key, "regular")
         return int(self._priorities.get(mapped, DEFAULT_PRIORITIES["regular"]))

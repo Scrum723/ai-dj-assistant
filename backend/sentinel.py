@@ -69,7 +69,7 @@ async def kill_ours(request: Request, _auth: None = Depends(require_operator)):
 
 @router.post("/sentinel/resume")
 async def resume(request: Request, _auth: None = Depends(require_operator)):
-    """Operator-only: clear the local kill switch so Halo and /action/* work again."""
+    """Operator-only: clear the local kill switch so Chief and /action/* work again."""
     global _kill
     record("resume", request)
     _kill = False

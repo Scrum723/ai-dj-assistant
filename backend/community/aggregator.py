@@ -13,6 +13,7 @@ from community.adapters.base import ChatAdapter
 from community.schema import SUPPORT_KINDS, ChatMessage, ChatUser
 from memory import retention_badges
 from moderation import check_input
+from settings import cohost_name
 
 logger = logging.getLogger(__name__)
 
@@ -512,10 +513,10 @@ class Aggregator:
 
         return True
 
-    def publish_halo(self, text: str, *, name: str = "Halo") -> bool:
-        """Publish a Halo line into the merged room (platform=halo)."""
+    def publish_halo(self, text: str, *, name: Optional[str] = None) -> bool:
+        """Publish a Chief line into the merged room (platform key stays halo)."""
+        handle = (name or cohost_name(self._get_settings())).strip()[:40] or "Chief"
         ts = time.time()
-        handle = (name or "Halo").strip()[:40] or "Halo"
         msg = ChatMessage(
             id=f"halo:{handle}:{ts}",
             platform="halo",

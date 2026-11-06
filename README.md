@@ -2,7 +2,7 @@
 
 The full booth: MIDI, decks, rekordbox virtual port, room, overlay, and viewer passes.
 
-**Halo** is the LLM buddy in chat — not the product name.
+**Chief** is the LLM buddy in chat — not the product name. Chief was previously called Halo; legacy `HALO_*` env vars, `!halo` commands, `halo.db` and settings key `halo` still work.
 
 This is a **standalone Mac app** that talks to rekordbox over a virtual MIDI port. It does **not** install into Pioneer DJ / rekordbox as a plugin.
 
@@ -13,11 +13,11 @@ It has four pieces:
 1. **Brain** (`backend`) — FastAPI + virtual MIDI port `AI_DJ_Virtual_Port`
 2. **Dashboard** — DJ controls, library, fan requests (`http://127.0.0.1:5173`)
 3. **Overlay** — OBS browser source avatar (`http://127.0.0.1:5174`)
-4. **Booth pass** — signup/login so livestream viewers keep a DJ Bot Botty profile (Halo is the chat LLM)
+4. **Booth pass** — signup/login so livestream viewers keep a DJ Bot Botty profile (Chief is the chat LLM)
 
 ## Desktop app (private, one process)
 
-Booth, request queue, room, overlay, and Halo run as **one agent**.
+Booth, request queue, room, overlay, and Chief run as **one agent**.
 
 ```bash
 cd "/Users/charlesclottin/Music/PioneerDJ/AI_DJ_Assistant"
@@ -28,20 +28,23 @@ Or build a double-clickable Mac app (stays on this machine):
 
 ```bash
 chmod +x make_app.sh && ./make_app.sh
-open Halo.app
+open Chief.app
 ```
+
+(`CFBundleIdentifier` stays `com.docweather.halodj` so macOS mic permissions survive the rename from Halo.app.)
 
 - Booth: `http://127.0.0.1:8000/booth/`
 - Viewer room: `http://127.0.0.1:8000/booth/?tab=room`
 - OBS overlay: `http://127.0.0.1:8000/overlay/`
-- **Halo live / DJ MODE** in the top bar: DJ mode keeps Halo quiet so you can mix.
-- Settings: voice (macOS free, or ElevenLabs if you paste a key), persona, what Halo may do, vibe, distraction, eco/balanced/show.
+- Visualizer: `http://127.0.0.1:8000/visualizer/`
+- **Chief live / DJ MODE** in the top bar: DJ mode keeps Chief quiet so you can mix.
+- Settings: voice (macOS free, or ElevenLabs if you paste a key), persona, what Chief may do, vibe, distraction, eco/balanced/show.
 
 ElevenLabs is **optional**. macOS `say` (Samantha/Ava) is the default and is already a real voice. Add an ElevenLabs key in Settings only if you want a custom studio voice.
 
 Eco mode = fewest API calls, no demo crowd, longer quiet gaps.
 
-Use `python3`, not `python`. Double-click **Start AI DJ Assistant.command** or **Halo.app**.
+Use `python3`, not `python`. Double-click **Start AI DJ Assistant.command** or **Chief.app**.
 
 ## Editing in Antigravity IDE
 
@@ -49,14 +52,14 @@ Yes — **Antigravity** is the editor. Open this folder, not `dist`:
 
 `/Users/charlesclottin/Music/PioneerDJ/AI_DJ_Assistant`
 
-Or double-click `Halo.code-workspace`.
+Or double-click `DJBotBotty.code-workspace` (legacy `Halo.code-workspace` still present).
 
 Edit source files:
 
 - Dashboard: `frontend-dashboard/src/App.jsx`
 - Room / settings: `frontend-dashboard/src/Room.jsx`, `Settings.jsx`
-- Overlay: `frontend-overlay/src/App.jsx`
-- Halo brain: `backend/cohost.py`, `backend/main.py`
+- Overlay: `frontend-overlay/src/App.jsx` (or `backend/frontend-overlay/src/App.jsx`)
+- Chief brain: `backend/cohost.py`, `backend/main.py`
 
 `frontend-dashboard/dist` is the **built copy**. Changing it does nothing useful and gets wiped on the next build. After you change `src`, run:
 
@@ -93,30 +96,36 @@ cd "/Users/charlesclottin/Music/PioneerDJ/AI_DJ_Assistant"
 .venv/bin/python backend/audio_analyzer.py "/Users/charlesclottin/Desktop/Finished Songs"
 ```
 
-## Co-host (Halo)
+## Co-host (Chief)
 
-Halo starts with the app. The overlay is her face: she greets people, answers chat, takes requests, and talks during silence so it is never stuck on one sentence.
+Chief starts with the app. The overlay is their face: they greet people, answer chat, take requests, and talk during silence so it is never stuck on one sentence.
 
 1. Open [http://127.0.0.1:5174](http://127.0.0.1:5174) (OBS Browser source, 1920×1080, click once to allow voice).
-2. Dashboard tab **Co-host Halo**:
+2. Dashboard tab **Co-host Chief**:
    - **Demo crowd ON** — fake viewers so you can test without going live
-   - **Talk to Halo** — type as a viewer
+   - **Talk to Chief** — type as a viewer
    - **YouTube live chat** — paste a live video ID when you are actually streaming
 3. Turn demo OFF once real chat is connected.
 
-`GEMINI_API_KEY` in `~/.env` makes replies generative. Without it, Halo still talks using local lines.
+`GEMINI_API_KEY` in `~/.env` makes replies generative. Without it, Chief still talks using local lines.
 
-### Halo LLM / memory env vars
+### Chief LLM / memory env vars
+
+`CHIEF_*` is primary; legacy `HALO_*` still accepted (CHIEF wins when both set). Bare `PORT` overrides `CHIEF_PORT` / `HALO_PORT`.
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `HALO_PROVIDER` | `gemini` | LLM backend: `gemini` or `xai` (alias `grok`) |
-| `GEMINI_API_KEY` | — | Required when `HALO_PROVIDER=gemini` for generative replies |
+| `CHIEF_PROVIDER` | `gemini` | LLM backend: `gemini` or `xai` (alias `grok`) (legacy `HALO_PROVIDER` still accepted) |
+| `GEMINI_API_KEY` | — | Required when `CHIEF_PROVIDER=gemini` for generative replies |
 | `GEMINI_MODEL` | `gemini-3.6-flash` | Gemini model id |
-| `XAI_API_KEY` | — | Required when `HALO_PROVIDER=xai` |
+| `XAI_API_KEY` | — | Required when `CHIEF_PROVIDER=xai` |
 | `XAI_MODEL` | `grok-2-latest` | xAI model id |
-| `HALO_COST_PER_1K` | `0.0001` | Estimated USD per 1k tokens for `/metrics` |
-| `HALO_DAILY_CALL_CAP` | unset | When set, Halo uses fallbacks after this many LLM calls/day |
+| `CHIEF_COST_PER_1K` | `0.0001` | Estimated USD per 1k tokens for `/metrics` (legacy `HALO_COST_PER_1K` still accepted) |
+| `CHIEF_DAILY_CALL_CAP` | unset | When set, Chief uses fallbacks after this many LLM calls/day (legacy `HALO_DAILY_CALL_CAP` still accepted) |
+| `CHIEF_PORT` | `8000` | Listen port when `PORT` unset (legacy `HALO_PORT` still accepted) |
+| `CHIEF_HOST` | `0.0.0.0` | Desktop bind host (legacy `HALO_HOST` still accepted) |
+| `CHIEF_TRAINING_LEVEL` | `1` | Idle trainer cadence hint (legacy `HALO_TRAINING_LEVEL` still accepted) |
+| `CHIEF_MODEL` | unset | Optional model hint for trainer (legacy `HALO_MODEL` still accepted) |
 | `DATA_DIR` | `backend/` | Directory for `halo.db`, `community.db`, `users.db`, `library.db`; daily copies under `$DATA_DIR/backups/YYYY-MM-DD/` |
 | `OPERATOR_KEY` | unset | Shared secret for booth control. Send as header `X-Operator-Key`. Required in cloud; when unset, `127.0.0.1` may call `/action/*`, `POST /settings`, `/agent/*`, `/sentinel/*` without a key. Dashboard reads the key from `localStorage.operatorKey`. |
 | `YOUTUBE_LIVE_VIDEO_ID` | unset | Optional default YouTube live id (adapters still off until enabled in settings) |
@@ -130,6 +139,11 @@ Halo starts with the app. The overlay is her face: she greets people, answers ch
 | `X_POST_ID` | unset | Optional root post id for X replies polling |
 | `RUMBLE_LIVESTREAM_API_URL` | unset | Rumble livestream API URL (embeds key) |
 | `FACEBOOK_PAGE_ACCESS_TOKEN` | unset | Facebook Page token for Live comments |
+| `NOWPLAYING_SOURCES` | `internal,wnp,file` | Comma-separated Now Playing sources tried in order (`internal`, `wnp`, `file`, `bridge`, `manual`) |
+| `NOWPLAYING_WNP_URL` | `http://127.0.0.1:8899/v1/last` | What's Now Playing `GET /v1/last` URL |
+| `NOWPLAYING_FILE` | unset | Path to text (`Artist - Title`) or JSON now-playing file |
+| `NOWPLAYING_BRIDGE_URL` | unset | External bridge `GET` URL (e.g. `http://127.0.0.1:8787/nowplaying`) |
+| `NOWPLAYING_POLL_SEC` | `2` | Now Playing poll interval seconds |
 
 ### Railway / djbotbotty.com
 
@@ -152,7 +166,7 @@ Boot runs `ops.maybe_daily_backup()`: if `$DATA_DIR/backups/<UTC-day>/.done` is 
 4. Keep `OPERATOR_KEY` / OAuth secrets unchanged across rollbacks unless the deploy that set them is the one you are undoing.
 5. Document the rollback time and SHA in `PROGRESS.md` Notes when you practice it (Alpha checklist: test once).
 
-Switch providers with `HALO_PROVIDER` only — no code change. Viewer memory persists in `$DATA_DIR/halo.db`; room history in `$DATA_DIR/community.db`. Full template: `.env.example`. Alpha ops checklist: `docs/alpha-checklist.md`.
+Switch providers with `CHIEF_PROVIDER` only (legacy `HALO_PROVIDER` still accepted) — no code change. Viewer memory persists in `$DATA_DIR/halo.db`; room history in `$DATA_DIR/community.db`. Full template: `.env.example`. Alpha ops checklist: `docs/alpha-checklist.md`.
 
 ### Platform reality
 
@@ -175,14 +189,14 @@ Experimental adapters show a warning in Settings when enabled and auto-disable a
 
 ### Moderation / kill switch
 
-Halo drops blocked words, links, caps/char floods, and rate-limited spam before they reach the LLM or TTS. Operator chat commands (from `halo.operator_handles` or the dashboard): `!mute <name>`, `!unmute <name>`, `!halo quiet`, `!halo on`. `POST /sentinel/kill-ours` freezes speech and `/action/*` (returns `{"status":"killed"}`); `POST /sentinel/resume` clears it.
+Chief drops blocked words, links, caps/char floods, and rate-limited spam before they reach the LLM or TTS. Operator chat commands (from `halo.operator_handles` or the dashboard): `!mute <name>`, `!unmute <name>`, `!chief quiet` / `!halo quiet`, `!chief on` / `!halo on`. `POST /sentinel/kill-ours` freezes speech and `/action/*` (returns `{"status":"killed"}`); `POST /sentinel/resume` clears it.
 
 Forward chat from another bot (Twitch bridge, etc.):
 
 ```bash
 curl -X POST http://127.0.0.1:8000/chat \
   -H 'Content-Type: application/json' \
-  -d '{"author":"Fan","message":"hey halo play Mad World","platform":"twitch"}'
+  -d '{"author":"Fan","message":"hey chief play Mad World","platform":"twitch"}'
 ```
 
 ## OBS overlay
@@ -191,8 +205,19 @@ Add a **Browser** source: `http://127.0.0.1:5174`
 Width 1920, height 1080, **Shutdown source when not visible** off.  
 The page is transparent. Press `s` or `t` in that window to test the mouth/TTS.
 
+## Visualizer & Now Playing
+
+Served by the backend at `http://127.0.0.1:8000/visualizer/` (no separate `python3 -m http.server`; that path is legacy).
+
+- **Live input (recommended):** open `http://127.0.0.1:8000/visualizer/` in **Chrome**, pick the **DJ controller / audio interface** in the input dropdown → *Use input* → allow the mic. No BlackHole needed. (BlackHole + Multi-Output remains an optional alternative.) `getUserMedia` works because `127.0.0.1` is a secure context. A LAN IP like `http://192.168.x.x:8000` is **not** a secure context, so the mic will not work there — always use `127.0.0.1` for live input.
+- **OBS:** for live audio, use **Window Capture** (macOS Screen Capture → the Chrome window; press **F** fullscreen, **H** hide UI). A **Browser Source** at `http://127.0.0.1:8000/visualizer/?ui=0` (1920×1080) works for remote-controlled visuals, but OBS's browser source generally cannot open audio inputs, so it only reacts to demo/file audio. (Live check on Charles's OBS version: blocked.)
+- **Restream Studio:** share the Chrome window/tab (Restream → Share screen → Chrome tab "Storm Cellar"). Tick "share tab audio" only if you want the visualizer's demo audio (usually off; the music comes from the mixer).
+
+Now Playing sources and env vars: see `NOWPLAYING_*` in the env table above. Dashboard **Visualizer** tab controls scenes/reactivity and shows current track.
+
 ## URLs
 
 - Dashboard: http://127.0.0.1:5173
 - Overlay: http://127.0.0.1:5174
 - API: http://127.0.0.1:8000
+- Visualizer: http://127.0.0.1:8000/visualizer/

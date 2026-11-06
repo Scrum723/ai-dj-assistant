@@ -1,5 +1,7 @@
 # DJ Bot Botty — Full Build Prompt (Phase A1 → Alpha)
 
+> Note (rename): The co-host is now **Chief** (was Halo). This historical build prompt still says Halo; treat that as the old name. Legacy `HALO_*` env vars, `!halo` commands, `halo.db`, and settings key `halo` still work.
+
 You are a coding agent working in the `ai-dj-assistant` repo (DJ Bot Botty, owner Charles Clottin, https://github.com/Scrum723/ai-dj-assistant). Execute the whole build plan below, phase by phase, in order, until Alpha.
 
 ## 1. Mission and repo context

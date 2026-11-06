@@ -21,7 +21,7 @@ const BADGE = {
   facebook: { label: 'FB', color: '#3b82f6' },
   rumble: { label: 'RB', color: '#f59e0b' },
   room: { label: 'ROOM', color: '#10b981' },
-  halo: { label: 'HALO', color: '#c4b5fd' },
+  halo: { label: 'CHIEF', color: '#c4b5fd' },
 };
 
 const FILTERS = ['all', 'youtube', 'twitch', 'room', 'halo'];
@@ -279,7 +279,7 @@ export default function Room({ state, refresh }) {
   }));
   const filtered = filter === 'all' ? chat : chat.filter((m) => (m.platform || 'room') === filter);
   const track = state?.current_track;
-  const haloName = agent.name || 'Halo';
+  const haloName = agent.name || 'Chief';
   const room = settings.room || {};
   const counts = presence.counts || {};
   const live = agent.live !== false && !agent.waiting_room;
@@ -377,7 +377,7 @@ export default function Room({ state, refresh }) {
         <div style={{ color: '#c4b5fd', fontSize: 12, letterSpacing: 1.4, fontWeight: 700, marginTop: 16 }}>NOW PLAYING</div>
         <h3 style={{ margin: '8px 0 8px' }}>{title}</h3>
         {typeof queueLength === 'number' && queueLength > 0 && (
-          <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 10 }}>Halo queue · {queueLength}</div>
+          <div style={{ color: '#9ca3af', fontSize: 12, marginBottom: 10 }}>{haloName} queue · {queueLength}</div>
         )}
         {currentSegment?.name && (
           <div style={{
@@ -468,7 +468,7 @@ export default function Room({ state, refresh }) {
                 fontWeight: 700, fontSize: 12, textTransform: 'uppercase',
               }}
             >
-              {f}
+              {f === 'halo' ? 'chief' : f}
             </button>
           ))}
         </div>

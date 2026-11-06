@@ -67,7 +67,7 @@ function Landing({ onSignup, onLogin }) {
       <p style={kicker}>THE FULL BOOTH</p>
       <h1 style={{ margin: '8px 0 12px', fontSize: 36 }}>DJ Bot Botty</h1>
       <p style={{ color: '#c4b5fd', lineHeight: 1.6 }}>
-        Decks, MIDI, room, overlay, and live chat. <strong>Halo</strong> is the LLM buddy in the booth — not the whole program.
+        Decks, MIDI, room, overlay, and live chat. <strong>Chief</strong> is the LLM buddy in the booth — not the whole program.
       </p>
       <p style={{ color: '#9ca3af', fontSize: 14 }}>
         Create a pass once. Next livestream you walk in with your profile and the extra perks we add over time.
@@ -110,7 +110,7 @@ function SignupForm({ onBack, onDone }) {
     <form onSubmit={submit} style={card}>
       <button type="button" onClick={onBack} style={ghost}>← Back</button>
       <h2>Sign up for DJ Bot Botty</h2>
-      <p style={{ color: '#9ca3af' }}>Halo will know your name in the room. MIDI and decks stay on the booth machine.</p>
+      <p style={{ color: '#9ca3af' }}>Chief will know your name in the room. MIDI and decks stay on the booth machine.</p>
       <input required minLength={2} placeholder="Display name" value={display_name} onChange={(e) => setName(e.target.value)} style={inp} />
       <input required type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} style={inp} />
       <input required minLength={8} type="password" placeholder="Password (8+)" value={password} onChange={(e) => setPassword(e.target.value)} style={inp} />

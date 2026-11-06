@@ -1,7 +1,8 @@
-"""Relay room/Halo lines into platform chats with loop prevention + rate caps.
+"""Relay room/Chief lines into platform chats with loop prevention + rate caps.
 
 Off by default. Rules: community.relay.{platform}: {halo, room, max_per_min}.
-Room → "[room] Name: text"; Halo → plain text.
+Room → "[room] Name: text"; cohost (platform=halo) → "Name: text".
+Platform bot credentials (TWITCH_BOT_NICK, etc.) are unchanged — only display text.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from collections import OrderedDict
 from typing import Any, Callable, Optional
 
 from community.schema import ChatMessage
+from settings import cohost_name
 
 logger = logging.getLogger(__name__)
 
@@ -103,12 +105,16 @@ def _norm_text(text: str) -> str:
     return " ".join((text or "").strip().split()).lower()
 
 
-def format_relay_text(msg: ChatMessage) -> str:
-    """Room → '[room] Name: text'; Halo → plain text."""
+def format_relay_text(msg: ChatMessage, *, cohost: Optional[str] = None) -> str:
+    """Room → '[room] Name: text'; cohost (halo) → 'Name: text' (configured name)."""
     text = (msg.text or "").strip()
     plat = (msg.platform or "").strip().lower()
     if plat == "halo":
-        return text[:500]
+        name = ""
+        if msg.user:
+            name = (msg.user.display_name or msg.user.handle or "").strip()
+        name = name or (cohost or "Chief").strip() or "Chief"
+        return f"{name}: {text}"[:500]
     name = ""
     if msg.user:
         name = (msg.user.display_name or msg.user.handle or "").strip()
@@ -126,7 +132,7 @@ def default_relay_rules() -> dict[str, dict[str, Any]]:
 
 
 class CommunityRelay:
-    """Fan room/Halo messages to adapters that can_send, with caps + echo tags."""
+    """Fan room/Chief messages to adapters that can_send, with caps + echo tags."""
 
     def __init__(
         self,
@@ -178,11 +184,11 @@ class CommunityRelay:
         return True
 
     def handle(self, msg: ChatMessage) -> list[str]:
-        """Relay a successfully ingested room/Halo message. Returns platforms sent."""
+        """Relay a successfully ingested room/Chief message. Returns platforms sent."""
         src = (msg.platform or "").strip().lower()
         if src not in SOURCE_PLATFORMS:
             return []
-        text = format_relay_text(msg)
+        text = format_relay_text(msg, cohost=cohost_name(self._get_settings()))
         if not text.strip():
             return []
         adapters = self._get_adapters() or {}

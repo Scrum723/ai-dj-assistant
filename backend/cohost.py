@@ -1,4 +1,4 @@
-"""Halo — autonomous DJ co-host that socializes with the room and overlay."""
+"""Chief (formerly Halo) — autonomous DJ co-host that socializes with the room and overlay."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from community.shoutouts import (
     merge_support,
     thank_template,
 )
+from envcompat import env
 from halo_queue import ACK_WAIT_SEC, PriorityQueue
 from llm import LLMProvider, get_provider
 from memory import (
@@ -33,22 +34,25 @@ from memory import (
 from moderation import check_input, check_output, mute, unmute
 from segments import SegmentScheduler, merge_segment_config
 from sentinel import is_killed
+from settings import cohost_name
 
 load_dotenv(os.path.expanduser("~/.env"))
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-AGENT_NAME = "Halo"
+AGENT_NAME = "Chief"  # fallback; prefer cohost_name(settings)
 
 MUTE_RE = re.compile(r"^!mute\s+(\S+)\s*$", re.I)
 UNMUTE_RE = re.compile(r"^!unmute\s+(\S+)\s*$", re.I)
-HALO_QUIET_RE = re.compile(r"^!halo\s+quiet\s*$", re.I)
-HALO_ON_RE = re.compile(r"^!halo\s+on\s*$", re.I)
+HALO_QUIET_RE = re.compile(r"^!(?:halo|chief)\s+quiet\s*$", re.I)
+HALO_ON_RE = re.compile(r"^!(?:halo|chief)\s+on\s*$", re.I)
+CHIEF_QUIET_RE = HALO_QUIET_RE
+CHIEF_ON_RE = HALO_ON_RE
 DEFAULT_OPERATOR_HANDLES = ("charles", "charlesclottin")
 
 PERSONA = (
-    "You are Halo, the LLM DJ buddy inside DJ Bot Botty "
+    "You are {name}, the LLM DJ buddy inside DJ Bot Botty "
     "(Charles Clottin / A Geostrophic Flow). DJ Bot Botty is the full booth: MIDI, decks, room. You are the chat agent. "
     "Your job is to socialize with chat: greet people by name, hype the music, "
     "take song requests, answer short questions, shout out fans, and keep energy up. "
@@ -59,13 +63,13 @@ PERSONA = (
 PERSONA_PRESETS = {
     "hype": PERSONA,
     "chill": (
-        "You are Halo, the calm booth partner inside DJ Bot Botty "
+        "You are {name}, the calm booth partner inside DJ Bot Botty "
         "(Charles Clottin / A Geostrophic Flow). Keep the room warm and unhurried: "
         "greet softly, acknowledge requests, answer briefly. Low energy, no shouting. "
         "Reply in 1-2 spoken sentences. No hashtags, no URLs, no emojis, no 'as an AI'."
     ),
     "host": (
-        "You are Halo, the clear room host inside DJ Bot Botty "
+        "You are {name}, the clear room host inside DJ Bot Botty "
         "(Charles Clottin / A Geostrophic Flow). Introduce people, take requests, "
         "answer questions, and keep the booth organized. Professional and friendly. "
         "Reply in 1-2 spoken sentences. No hashtags, no URLs, no emojis, no 'as an AI'."
@@ -81,6 +85,7 @@ IGNORE_USERS = {
     "moobot",
     "fossabot",
     "halo",
+    "chief",
     "ai dj",
     "ai_dj",
 }
@@ -98,7 +103,20 @@ HYPE_RE = re.compile(
     r"\b(fire|slaps|banger|lets go|let's go|love this|w+|huge|drop|energy|hype|insane)\b",
     re.I,
 )
-MENTION_RE = re.compile(r"\b(halo|dj|nova|doc weather|geostrophic)\b", re.I)
+MENTION_RE = re.compile(r"\b(halo|chief|dj|nova|doc weather|geostrophic)\b", re.I)
+TRACK_ID_RE = re.compile(
+    r"(?:^!(?:song|track|id)\b)"
+    r"|(?:\bwhat(?:'s| is|s)\s+(?:this\s+)?song\b)"
+    r"|(?:\bwhat\s+song\s+is\s+this\b)"
+    r"|(?:\bwhat(?:'s| is|s)\s+playing\b)"
+    r"|(?:\btrack\s*id\b)"
+    r"|(?:\bsong\s+name\b)"
+    r"|(?:\bnow\s+playing\b)",
+    re.I,
+)
+TRACK_CHANGE_SKIP_SEC = 20.0
+ANNOUNCE_CANNED = "Now playing: {title} — {artist}"
+NO_TRACK_LINE = "Not sure yet, I'll ask the DJ"
 
 WELCOME_LINES = [
     "{name} just walked in — welcome to the booth!",
@@ -127,14 +145,14 @@ HYPE_LINES = [
     "Yes {name}! Keep that in the comments, the booth hears you.",
 ]
 IDLE_GENERIC = [
-    "Chat's live — drop a song name or just say hey. Halo's in the booth.",
+    "Chat's live — drop a song name or just say hey. {name}'s in the booth.",
     "If you're new here, welcome. Request a track and I'll try to queue it.",
     "Who's hanging in the stream right now? Call out your city.",
     "This set's for the night crowd. Tell me if you want it darker or brighter.",
     "Don't be shy in chat. I talk back.",
 ]
 IDLE_WAITING_ROOM = [
-    "Halo's holding the waiting room — Charles isn't live right now. Drop a request or say hey.",
+    "{name}'s holding the waiting room — Charles isn't live right now. Drop a request or say hey.",
     "Booth's quiet for now. Ask about the next show or leave a track for the crate.",
     "Waiting room mode: I still hear you. Requests and questions are welcome.",
     "Not live at the moment — hang out, request a song, or ask when the next set is.",
@@ -170,6 +188,7 @@ DEMO_FANS = [
 # Reply selection priority (lower = sooner). mentions > requests > first-time > questions > rest
 _REPLY_PRIORITY = {
     "mention": 0,
+    "track_id": 0,
     "request": 1,
     "welcome": 2,
     "new_viewer": 2,
@@ -189,7 +208,7 @@ _PLATFORM_LABEL = {
     "facebook": "Facebook",
     "rumble": "Rumble",
     "room": "room",
-    "halo": "Halo",
+    "halo": "Chief",  # display label; platform key stays "halo"
     "chat": "chat",
     "demo": "demo",
     "dashboard": "the booth",
@@ -249,6 +268,9 @@ class CohostAgent:
         self.get_settings = get_settings
         self.memory = memory if memory is not None else ViewerMemory()
         self._llm = llm if llm is not None else get_provider()
+        # Prevent status() → _waiting_room() → get_snapshot() → status() recursion
+        # (main.snapshot embeds agent.status()).
+        self._building_status = False
 
         self.running = True
         self.demo = bool(get_settings().get("demo"))
@@ -272,6 +294,12 @@ class CohostAgent:
         self._segments = SegmentScheduler(clock=lambda: self._clock())
         self._last_in_joke_at = 0.0
         self._last_track_title: Optional[str] = None
+        self._current_np: Optional[dict] = None
+        self._last_track_change_at: float = 0.0
+        self._last_announce_at: float = 0.0
+        self._pending_track_announce: Optional[dict] = None
+        self._announce_count = 0
+        self._track_id_answers = 0
         self._inbox: asyncio.Queue = asyncio.Queue()
         self._pending: list[dict] = []
         self._last_reply_at = 0.0
@@ -294,32 +322,41 @@ class CohostAgent:
         self.queue = PriorityQueue(clock=lambda: self._clock())
         self._sync_queue_config()
         if not self._llm.available:
-            logger.warning("Halo LLM unavailable — using local lines only.")
+            logger.warning("Chief LLM unavailable — using local lines only.")
 
     def _cfg(self) -> dict:
         return self.get_settings()
 
     def _halo_name(self) -> str:
-        return (self._cfg().get("halo") or {}).get("name") or AGENT_NAME
+        return cohost_name(self._cfg())
 
     def _persona(self) -> str:
         """Active system persona from preset or custom text (live settings, no restart)."""
         halo = self._cfg().get("halo") or {}
+        name = self._halo_name()
         preset = str(halo.get("persona_preset") or "hype").strip().lower()
         if preset not in PERSONA_PRESET_IDS:
             preset = "hype"
         if preset == "custom":
             custom = (halo.get("persona") or "").strip()
-            return custom or PERSONA
-        return PERSONA_PRESETS.get(preset) or PERSONA
+            return custom or PERSONA.format(name=name)
+        template = PERSONA_PRESETS.get(preset) or PERSONA
+        try:
+            return template.format(name=name)
+        except Exception:
+            return template
 
     def status(self) -> dict[str, Any]:
         cfg = self._cfg()
         halo = cfg.get("halo") or {}
         env = cfg.get("environment") or {}
         quiet_mood = bool(halo.get("dj_mode") or halo.get("dj_mode_silent"))
-        waiting = self._waiting_room()
-        qsnap = self.queue.snapshot(now=self._clock())
+        self._building_status = True
+        try:
+            waiting = self._waiting_room()
+            qsnap = self.queue.snapshot(now=self._clock())
+        finally:
+            self._building_status = False
         return {
             "name": self._halo_name(),
             "running": self.running,
@@ -384,6 +421,39 @@ class CohostAgent:
 
     def set_record_supporter_hook(self, hook: Optional[Callable[[dict], None]]) -> None:
         self._record_supporter = hook
+
+    def on_track_change(self, track: dict) -> None:
+        """Subscribe target for nowplaying track_change — rate-limit then queue announce."""
+        track = dict(track or {})
+        if track.get("unavailable") or not (track.get("title") or track.get("artist")):
+            if not track:
+                self._current_np = None
+            return
+        now = self._clock()
+        prev_change = self._last_track_change_at
+        self._last_track_change_at = now
+        self._current_np = dict(track)
+        title = (track.get("title") or "").strip()
+        if title:
+            self._last_track_title = title
+
+        halo = self._cfg().get("halo") or {}
+        if not bool(halo.get("announce_tracks", True)):
+            return
+        if is_killed() or self.quiet:
+            return
+        if halo.get("dj_mode") or halo.get("dj_mode_silent"):
+            return
+        # Hard skip: two changes within 20s → ignore the later one
+        if prev_change and (now - prev_change) < TRACK_CHANGE_SKIP_SEC:
+            return
+        try:
+            gap = float(halo.get("announce_min_gap_sec") if halo.get("announce_min_gap_sec") is not None else 90)
+        except (TypeError, ValueError):
+            gap = 90.0
+        if self._last_announce_at and (now - self._last_announce_at) < gap:
+            return
+        self._pending_track_announce = dict(track)
 
     def _burst_key(self, author: str, platform: str) -> str:
         return f"{(platform or 'chat').strip().lower()}:{(author or '').strip().lower()}"
@@ -480,12 +550,12 @@ class CohostAgent:
 
     def _cost_per_1k(self) -> float:
         try:
-            return float(os.getenv("HALO_COST_PER_1K") or "0.0001")
+            return float(env("COST_PER_1K") or "0.0001")
         except ValueError:
             return 0.0001
 
     def _daily_call_cap(self) -> Optional[int]:
-        raw = os.getenv("HALO_DAILY_CALL_CAP")
+        raw = env("DAILY_CALL_CAP")
         if raw is None or str(raw).strip() == "":
             return None
         try:
@@ -502,6 +572,8 @@ class CohostAgent:
             "p95_ms": int(round(_percentile(lats, 95))),
             "est_cost_usd": round(self._tokens_est / 1000.0 * self._cost_per_1k(), 6),
             "tokens_est": self._tokens_est,
+            "announce_count": int(self._announce_count),
+            "track_id_answers": int(self._track_id_answers),
         }
 
     def _sync_queue_config(self) -> None:
@@ -521,12 +593,14 @@ class CohostAgent:
         if not bool(halo.get("live", True)):
             return True
         has_stream = bool(self.youtube_id)
-        try:
-            snap = self.get_snapshot() or {}
-            if snap.get("playing"):
-                has_stream = True
-        except Exception:
-            pass
+        # Skip get_snapshot while status() is building — snapshot includes agent.status().
+        if not self._building_status:
+            try:
+                snap = self.get_snapshot() or {}
+                if snap.get("playing"):
+                    has_stream = True
+            except Exception:
+                pass
         # Explicit live=True keeps booth mode even without a detected stream
         if halo.get("live") is True:
             return False
@@ -578,6 +652,8 @@ class CohostAgent:
             return "supporter"
         if classified == "request":
             return "request"
+        if classified == "track_id":
+            return "track_id"
         if classified == "mention":
             return "mention"
         if classified in {"welcome", "new_viewer"}:
@@ -625,6 +701,8 @@ class CohostAgent:
 
     def _platform_label(self, platform: str) -> str:
         p = (platform or "chat").strip().lower() or "chat"
+        if p == "halo":
+            return self._halo_name()
         return _PLATFORM_LABEL.get(p, p)
 
     def _platform_phrase(self, platform: str) -> tuple[str, str]:
@@ -788,7 +866,7 @@ class CohostAgent:
         return set(DEFAULT_OPERATOR_HANDLES)
 
     def _is_operator(self, author: str, platform: str = "chat") -> bool:
-        # Dashboard "Talk to Halo" is the booth operator console
+        # Dashboard "Talk to Chief" is the booth operator console
         if (platform or "").strip().lower() == "dashboard":
             return True
         key = (author or "").strip().lower()
@@ -797,7 +875,7 @@ class CohostAgent:
         return key in self._operator_handles(platform)
 
     def _is_dj_priority(self, item: dict) -> bool:
-        """Mentions, requests, and operator — the only talkers in DJ quiet mode."""
+        """Mentions, requests, track_id, and operator — the only talkers in DJ quiet mode."""
         author = item.get("author") or ""
         platform = item.get("platform") or "chat"
         if self._is_operator(author, platform):
@@ -805,10 +883,10 @@ class CohostAgent:
         kind = item.get("_kind") or self._classify(
             author, item.get("message") or "", platform=platform
         )
-        return kind in {"mention", "request"}
+        return kind in {"mention", "request", "track_id"}
 
     def _queue_task_dj_ok(self, task) -> bool:
-        if task.kind in {"operator", "safety", "supporter", "request", "mention"}:
+        if task.kind in {"operator", "safety", "supporter", "request", "mention", "track_id"}:
             return True
         return self._is_dj_priority(self._item_from_task(task))
 
@@ -821,6 +899,7 @@ class CohostAgent:
         kind_map = {
             "request": "request",
             "mention": "mention",
+            "track_id": "track_id",
             "first_timer": "welcome",
             "operator": "mention",
             "safety": "mention",
@@ -852,11 +931,11 @@ class CohostAgent:
             unmute(m.group(1))
             self._say(f"Unmuted {m.group(1)}.", mood="talk")
             return True
-        if HALO_QUIET_RE.match(text):
+        if HALO_QUIET_RE.match(text) or CHIEF_QUIET_RE.match(text):
             self.quiet = True
             self._say("Going quiet.", mood="talk")
             return True
-        if HALO_ON_RE.match(text):
+        if HALO_ON_RE.match(text) or CHIEF_ON_RE.match(text):
             self.quiet = False
             self._say("Back on.", mood="talk")
             return True
@@ -977,7 +1056,7 @@ class CohostAgent:
             pass
 
     async def run(self):
-        logger.info("Halo co-host loop starting (demo=%s).", self.demo)
+        logger.info("Chief co-host loop starting (demo=%s).", self.demo)
         # YouTube chat is owned by community.adapters.youtube (Aggregator).
         await asyncio.sleep(1.2)
         if not self._intro_done:
@@ -995,7 +1074,7 @@ class CohostAgent:
             try:
                 await self._tick()
             except Exception:
-                logger.exception("Halo tick failed")
+                logger.exception("Chief tick failed")
             energy = (self._cfg().get("environment") or {}).get("energy_mode") or "balanced"
             await asyncio.sleep(0.55 if energy == "eco" else 0.3)
 
@@ -1032,22 +1111,11 @@ class CohostAgent:
         try:
             snap = self.get_snapshot() or {}
             track = snap.get("current_track") or {}
-            title = self._short_title(track.get("filename") or "")
-            bpm = track.get("bpm")
+            np = self._nowplaying_track()
+            title = (np.get("title") or "").strip() or self._short_title(track.get("filename") or "")
+            bpm = np.get("bpm") if np.get("bpm") is not None else track.get("bpm")
         except Exception:
             logger.exception("snapshot for segments failed")
-
-        pending_track_id = None
-        if title and title != self._last_track_title:
-            prev = self._last_track_title
-            self._last_track_title = title
-            if prev is not None and not self.quiet and not dj_silent:
-                pending_track_id = self._segments.on_transition(
-                    self._segment_configs(),
-                    title=title,
-                    dj_mode=dj_mode,
-                    now=now,
-                )
 
         min_sec = self._min_reply_sec()
         due = self._last_reply_at <= 0 or (now - self._last_reply_at) >= min_sec
@@ -1068,16 +1136,18 @@ class CohostAgent:
                 return True
             if self._is_operator(task.target, task.platform):
                 return False
-            if task.kind in {"operator", "safety", "supporter"}:
+            if task.kind in {"operator", "safety", "supporter", "track_id"}:
                 return False
             last = self._last_reply_user.get(task.target.lower(), 0.0)
             return (now - last) < self._user_cooldown_sec(task.kind)
 
         replied = False
-        if pending_track_id is not None:
-            self._say(pending_track_id.line, mood="talk")
-            self._last_reply_at = now
-            self._reply_times.append(now)
+        if self._pending_track_announce is not None and not self.quiet and not dj_silent and not dj_mode:
+            pending = self._pending_track_announce
+            self._pending_track_announce = None
+            await self._announce_track(pending, energy=energy)
+            self._last_reply_at = self._clock()
+            self._reply_times.append(self._last_reply_at)
             replied = True
         elif not self.quiet and not dj_silent and due and budget_ok:
             task = self.queue.pop(now=now, skip_user=_skip_task)
@@ -1239,12 +1309,19 @@ class CohostAgent:
         is_op = self._is_operator(author, platform)
         event_kind = (item.get("event_kind") or "").strip().lower()
         is_supporter = bool(item.get("_supporter")) or event_kind in SUPPORT_KINDS or event_kind == "supporter"
-        # DJ quiet: only mentions, requests, operator, supporters
-        if dj_mode and not is_op and not is_supporter and kind not in {"mention", "request"}:
+        # DJ quiet: only mentions, requests, track_id, operator, supporters
+        if dj_mode and not is_op and not is_supporter and kind not in {"mention", "request", "track_id"}:
             return
         max_sent = 3 if is_op else (1 if dj_mode else 2)
 
         demo = platform == "demo"
+        if kind == "track_id":
+            line = self._format_track_id_line()
+            self._track_id_answers += 1
+            self._say(line, target=author, mood="talk")
+            self._last_reply_user[author.lower()] = self._clock()
+            return
+
         if is_supporter:
             fallback = self._thanks_line(item)
             use_ai = (not demo) and energy != "eco"
@@ -1356,7 +1433,7 @@ class CohostAgent:
             "supporter",
         }:
             should = True
-        elif kind in {"welcome", "question", "mention", "new_viewer", "returning", "milestone"}:
+        elif kind in {"welcome", "question", "mention", "track_id", "new_viewer", "returning", "milestone"}:
             should = True
         elif kind == "hype":
             should = autonomy >= 35
@@ -1425,8 +1502,9 @@ class CohostAgent:
         caps = caps or {}
         halo = self._cfg().get("halo") or {}
         waiting = self._waiting_room()
+        cname = self._halo_name()
         if waiting:
-            options = list(IDLE_WAITING_ROOM)
+            options = [line.format(name=cname) for line in IDLE_WAITING_ROOM]
             schedule = (halo.get("schedule") or "").strip()
             next_show = (halo.get("next_show") or "").strip()
             last_set = (halo.get("last_set") or "").strip()
@@ -1442,7 +1520,7 @@ class CohostAgent:
                 options.extend(FOLLOW_WAITING)
             self._say(random.choice(options), mood="idle")
             return
-        options = list(IDLE_GENERIC)
+        options = [line.format(name=cname) for line in IDLE_GENERIC]
         if caps.get("introduce_fans") and len(viewers) >= 2:
             a, b = random.sample(viewers, 2)
             options.append(f"{a}, meet {b} — both of you are in the booth tonight. Say hey.")
@@ -1476,6 +1554,52 @@ class CohostAgent:
     def _greet_key(self, author: str, platform: str = "chat", profile_id: Any = None) -> str:
         return GreetingShowState.key(platform or "chat", author, profile_id)
 
+    def _nowplaying_track(self) -> dict:
+        """Prefer subscribed nowplaying state; fall back to booth snapshot."""
+        if self._current_np and (self._current_np.get("title") or self._current_np.get("artist")):
+            return dict(self._current_np)
+        try:
+            snap = self.get_snapshot() or {}
+            cur = snap.get("nowplaying") or snap.get("current_track") or {}
+            if isinstance(cur, dict) and (cur.get("title") or cur.get("artist") or cur.get("filename")):
+                if cur.get("title") or cur.get("artist"):
+                    return dict(cur)
+                # internal deck shape uses filename
+                return {
+                    "title": self._short_title(cur.get("filename") or ""),
+                    "artist": cur.get("artist"),
+                    "bpm": cur.get("bpm"),
+                    "key": cur.get("key"),
+                }
+        except Exception:
+            logger.exception("nowplaying snapshot read failed")
+        return {}
+
+    def _format_track_id_line(self, track: Optional[dict] = None) -> str:
+        track = track if track is not None else self._nowplaying_track()
+        title = (track.get("title") or "").strip() if track else ""
+        artist = (track.get("artist") or "").strip() if track else ""
+        if not title and not artist:
+            return NO_TRACK_LINE
+        if not title:
+            title = "Unknown title"
+        if not artist:
+            artist = "Unknown artist"
+        bits = [f"{title} — {artist}"]
+        bpm = track.get("bpm") if track else None
+        key = (track.get("key") or "").strip() if track else ""
+        extras: list[str] = []
+        if bpm is not None:
+            try:
+                extras.append(f"{float(bpm):g} BPM")
+            except (TypeError, ValueError):
+                pass
+        if key:
+            extras.append(str(key))
+        if extras:
+            bits.append(f"({', '.join(extras)})")
+        return " ".join(bits)
+
     def _classify(
         self,
         author: str,
@@ -1487,6 +1611,8 @@ class CohostAgent:
     ) -> str:
         if REQUEST_RE.search(message) or message.lower().startswith("!request"):
             return "request"
+        if TRACK_ID_RE.search(message or ""):
+            return "track_id"
         if QUESTION_RE.search(message):
             return "question"
         if MENTION_RE.search(message):
@@ -1672,16 +1798,65 @@ class CohostAgent:
                 return clip_sentences(cleaned, limit)
             return capped_fallback
         except asyncio.TimeoutError:
-            logger.info("Halo LLM thank-you timed out; using template")
+            logger.info("Chief LLM thank-you timed out; using template")
             return capped_fallback
         except Exception as e:
             err = str(e)
-            logger.error("Halo LLM reply failed: %s", e)
+            logger.error("Chief LLM reply failed: %s", e)
             if "429" in err or "RESOURCE_EXHAUSTED" in err:
                 self._ai_backoff_until = time.time() + 75
         return capped_fallback
 
-    def _say(self, text: str, target: Optional[str] = None, mood: str = "talk"):
+    async def _announce_track(self, track: dict, *, energy: str = "balanced") -> None:
+        """Room/chat announce for a track_change (optional TTS + optional LLM flourish)."""
+        if is_killed() or self.quiet:
+            return
+        halo = self._cfg().get("halo") or {}
+        if not bool(halo.get("announce_tracks", True)):
+            return
+        if halo.get("dj_mode") or halo.get("dj_mode_silent"):
+            return
+        title = (track.get("title") or "").strip() or "Unknown title"
+        artist = (track.get("artist") or "").strip() or "Unknown artist"
+        canned = ANNOUNCE_CANNED.format(title=title, artist=artist)
+        # Keep segment status in sync with real now-playing
+        try:
+            self._segments.on_transition(
+                self._segment_configs(),
+                title=title,
+                artist=artist,
+                bpm=track.get("bpm"),
+                key=track.get("key"),
+                dj_mode=False,
+                now=self._clock(),
+            )
+        except Exception:
+            logger.exception("track_id segment on_transition failed")
+
+        line = canned
+        use_ai = energy != "eco"
+        if use_ai:
+            hint = (
+                "Announce the new track in one short spoken sentence. "
+                f"Start from or include: {canned}. Light hype only."
+            )
+            line = await self._compose(
+                "booth",
+                f"now playing {title} by {artist}",
+                fallback=canned,
+                hint=hint,
+                platform="halo",
+                max_sentences=1,
+                timeout_sec=4.0,
+            )
+            if not (line or "").strip():
+                line = canned
+        announce_tts = bool(halo.get("announce_tts", False))
+        self._say(line, mood="talk", tts=announce_tts)
+        self._last_announce_at = self._clock()
+        self._announce_count += 1
+
+    def _say(self, text: str, target: Optional[str] = None, mood: str = "talk", *, tts: bool = True):
         if is_killed():
             return
         text = (text or "").strip()
@@ -1696,7 +1871,8 @@ class CohostAgent:
         self.mood = "speaking"
         self.last_target = target
         self.replies += 1
-        self.speak(text, target=target, mood=mood)
+        if tts:
+            self.speak(text, target=target, mood=mood)
         name = self._halo_name()
         self.chat.append(
             {

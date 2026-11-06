@@ -1,4 +1,4 @@
-"""Idle Halo trainer. Runs only when the room is quiet. Pulls back at Grok v3+."""
+"""Idle Chief (formerly Halo) trainer. Runs only when the room is quiet. Pulls back at Grok v3+."""
 
 from __future__ import annotations
 
@@ -10,14 +10,16 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from envcompat import env
+
 logger = logging.getLogger(__name__)
 NOTES = Path(__file__).resolve().parent / "halo_training.jsonl"
 
 
 def training_interval_sec() -> int:
     """Non-use training. Slow down once the buddy is on Grok 3+."""
-    model = (os.getenv("GEMINI_MODEL") or os.getenv("XAI_MODEL") or os.getenv("HALO_MODEL") or "").lower()
-    level = os.getenv("HALO_TRAINING_LEVEL", "")
+    model = (os.getenv("GEMINI_MODEL") or os.getenv("XAI_MODEL") or env("MODEL") or "").lower()
+    level = env("TRAINING_LEVEL") or ""
     if level.isdigit() and int(level) >= 3:
         return 6 * 60 * 60
     if "grok-3" in model or "grok-4" in model or "gemini-3" in model or "gemini-2.5" in model:
@@ -32,7 +34,7 @@ def _append(note: dict[str, Any]) -> None:
 
 
 async def idle_trainer(get_snapshot: Callable[[], dict[str, Any]], stop: asyncio.Event) -> None:
-    logger.info("Halo idle trainer armed (interval %ss).", training_interval_sec())
+    logger.info("Chief idle trainer armed (interval %ss).", training_interval_sec())
     while not stop.is_set():
         try:
             await asyncio.wait_for(stop.wait(), timeout=training_interval_sec())
@@ -56,4 +58,4 @@ async def idle_trainer(get_snapshot: Callable[[], dict[str, Any]], stop: asyncio
                 "interval_sec": training_interval_sec(),
             }
         )
-        logger.info("Halo idle note written (%s lines).", sum(1 for _ in NOTES.open()) if NOTES.exists() else 0)
+        logger.info("Chief idle note written (%s lines).", sum(1 for _ in NOTES.open()) if NOTES.exists() else 0)
