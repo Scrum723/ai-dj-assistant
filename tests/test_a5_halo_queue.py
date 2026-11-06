@@ -199,6 +199,20 @@ def test_state_exposes_queue_fields(agent):
     assert st["waiting_room"] is False
 
 
+def test_status_survives_snapshot_embedding_agent(agent):
+    """main.snapshot() embeds agent.status(); _waiting_room must not re-enter it."""
+
+    def recursive_snapshot():
+        return {"playing": True, "agent": agent.status()}
+
+    agent.get_snapshot = recursive_snapshot
+    st = agent.status()
+    assert isinstance(st, dict)
+    assert "waiting_room" in st
+    # Outside status(), waiting_room may safely read playing via snapshot.
+    assert agent._waiting_room() is False
+
+
 def test_aggregator_operator_skips_rate():
     from community.aggregator import Aggregator
     from community.schema import ChatMessage, ChatUser

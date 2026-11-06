@@ -268,6 +268,9 @@ class CohostAgent:
         self.get_settings = get_settings
         self.memory = memory if memory is not None else ViewerMemory()
         self._llm = llm if llm is not None else get_provider()
+        # Prevent status() → _waiting_room() → get_snapshot() → status() recursion
+        # (main.snapshot embeds agent.status()).
+        self._building_status = False
 
         self.running = True
         self.demo = bool(get_settings().get("demo"))
@@ -348,8 +351,12 @@ class CohostAgent:
         halo = cfg.get("halo") or {}
         env = cfg.get("environment") or {}
         quiet_mood = bool(halo.get("dj_mode") or halo.get("dj_mode_silent"))
-        waiting = self._waiting_room()
-        qsnap = self.queue.snapshot(now=self._clock())
+        self._building_status = True
+        try:
+            waiting = self._waiting_room()
+            qsnap = self.queue.snapshot(now=self._clock())
+        finally:
+            self._building_status = False
         return {
             "name": self._halo_name(),
             "running": self.running,
@@ -586,12 +593,14 @@ class CohostAgent:
         if not bool(halo.get("live", True)):
             return True
         has_stream = bool(self.youtube_id)
-        try:
-            snap = self.get_snapshot() or {}
-            if snap.get("playing"):
-                has_stream = True
-        except Exception:
-            pass
+        # Skip get_snapshot while status() is building — snapshot includes agent.status().
+        if not self._building_status:
+            try:
+                snap = self.get_snapshot() or {}
+                if snap.get("playing"):
+                    has_stream = True
+            except Exception:
+                pass
         # Explicit live=True keeps booth mode even without a detected stream
         if halo.get("live") is True:
             return False
