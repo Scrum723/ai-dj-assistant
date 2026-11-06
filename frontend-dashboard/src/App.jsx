@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Play, Pause, FastForward, Music, Radio, Smartphone, Wifi, WifiOff, Bot, Users } from 'lucide-react';
+import { Play, Pause, FastForward, Music, Radio, Smartphone, Wifi, WifiOff, Bot, Users, CircleHelp } from 'lucide-react';
 import { api, wsUrl } from './api.js';
 import Settings from './Settings.jsx';
 import Room from './Room.jsx';
 import Profile from './Profile.jsx';
 import Visualizer from './Visualizer.jsx';
 import StreamLinks, { openAllStreams } from './StreamLinks.jsx';
+import FirstUseTour, { resetBoothTour } from './FirstUseTour.jsx';
 
 const VIBES = {
   night: '#121212',
@@ -20,6 +21,7 @@ export default function App() {
   const [state, setState] = useState(null);
   const [tracks, setTracks] = useState([]);
   const [error, setError] = useState('');
+  const [tourForce, setTourForce] = useState(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -88,20 +90,20 @@ export default function App() {
           <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 'bold', letterSpacing: '1px' }}>DJ BOT BOTTY</h1>
         </div>
         <StatusPills state={state} error={error} />
-        <div style={{ display: 'flex', gap: '15px' }}>
-          <button onClick={toggleDj} style={navBtnStyle(true, djMode ? '#f59e0b' : '#374151')}>
+        <div style={{ display: 'flex', gap: '15px', flexWrap: 'wrap' }}>
+          <button data-tour="tour-dj-mode" onClick={toggleDj} style={navBtnStyle(true, djMode ? '#f59e0b' : '#374151')}>
             {djMode ? 'DJ MODE — Chief quiet' : 'Chief live / DJ MODE'}
           </button>
           <button onClick={() => openAllStreams(state?.settings)} style={navBtnStyle(true, '#ff0033')}>
             Open all streams
           </button>
-          <button onClick={() => setActiveTab('dj')} style={navBtnStyle(activeTab === 'dj', '#7c3aed')}>Booth</button>
-          <button onClick={() => setActiveTab('host')} style={navBtnStyle(activeTab === 'host', '#db2777')}>Co-host {state?.agent?.name || 'Chief'}</button>
-          <button onClick={() => setActiveTab('room')} style={navBtnStyle(activeTab === 'room', '#10b981')}>Room</button>
-          <button onClick={() => setActiveTab('fan')} style={navBtnStyle(activeTab === 'fan', '#059669')}>Requests</button>
-          <button onClick={() => setActiveTab('profile')} style={navBtnStyle(activeTab === 'profile', '#a78bfa')}>Profile</button>
-          <button onClick={() => setActiveTab('visualizer')} style={navBtnStyle(activeTab === 'visualizer', '#38bdf8')}>Visualizer</button>
-          <button onClick={() => setActiveTab('settings')} style={navBtnStyle(activeTab === 'settings', '#6366f1')}>Settings</button>
+          <button data-tour="tour-tab-dj" onClick={() => setActiveTab('dj')} style={navBtnStyle(activeTab === 'dj', '#7c3aed')}>Booth</button>
+          <button data-tour="tour-tab-host" onClick={() => setActiveTab('host')} style={navBtnStyle(activeTab === 'host', '#db2777')}>Co-host {state?.agent?.name || 'Chief'}</button>
+          <button data-tour="tour-tab-room" onClick={() => setActiveTab('room')} style={navBtnStyle(activeTab === 'room', '#10b981')}>Room</button>
+          <button data-tour="tour-tab-fan" onClick={() => setActiveTab('fan')} style={navBtnStyle(activeTab === 'fan', '#059669')}>Requests</button>
+          <button data-tour="tour-tab-profile" onClick={() => setActiveTab('profile')} style={navBtnStyle(activeTab === 'profile', '#a78bfa')}>Profile</button>
+          <button data-tour="tour-tab-visualizer" onClick={() => setActiveTab('visualizer')} style={navBtnStyle(activeTab === 'visualizer', '#38bdf8')}>Visualizer</button>
+          <button data-tour="tour-tab-settings" onClick={() => setActiveTab('settings')} style={navBtnStyle(activeTab === 'settings', '#6366f1')}>Settings</button>
         </div>
       </nav>
 
@@ -115,6 +117,31 @@ export default function App() {
         {activeTab === 'visualizer' && <Visualizer />}
         {activeTab === 'settings' && <Settings state={state} refresh={refresh} />}
       </div>
+
+      <button
+        type="button"
+        title="Replay booth tour"
+        aria-label="Replay booth tour"
+        onClick={() => {
+          resetBoothTour();
+          setTourForce((n) => n + 1);
+        }}
+        style={{
+          position: 'fixed', right: 18, bottom: 18, zIndex: 9000,
+          width: 44, height: 44, borderRadius: 999, border: 'none',
+          background: '#7c3aed', color: '#fff', cursor: 'pointer',
+          boxShadow: '0 8px 24px rgba(124,58,237,0.45)',
+          display: 'grid', placeItems: 'center',
+        }}
+      >
+        <CircleHelp size={22} />
+      </button>
+
+      <FirstUseTour
+        key={tourForce}
+        setActiveTab={setActiveTab}
+        forceOpen={tourForce > 0}
+      />
     </div>
   );
 }
