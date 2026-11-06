@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import socket
@@ -10,7 +11,7 @@ from typing import Any, Optional
 
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -92,6 +93,7 @@ speech_task: Optional[asyncio.Task] = None
 presence_task: Optional[asyncio.Task] = None
 nowplaying_task: Optional[asyncio.Task] = None
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
+_nowplaying_sse_queues: list[asyncio.Queue] = []
 
 
 class Hub:
@@ -376,6 +378,29 @@ def publish_highlight(payload: dict):
     msg = {"type": "highlight", "payload": payload}
     broadcast(msg)
     room_broadcast(msg)
+
+
+def publish_nowplaying(track: dict) -> None:
+    """Fan out track_change to /ws, /ws/room, and SSE subscribers."""
+    payload = dict(track) if track else {}
+    msg = {"type": "nowplaying", "payload": payload}
+    broadcast(msg)
+    room_broadcast(msg)
+
+    async def _fanout() -> None:
+        dead: list[asyncio.Queue] = []
+        for q in list(_nowplaying_sse_queues):
+            try:
+                q.put_nowait({"event": "track_change", "data": payload})
+            except Exception:
+                dead.append(q)
+        for q in dead:
+            try:
+                _nowplaying_sse_queues.remove(q)
+            except ValueError:
+                pass
+
+    _schedule(_fanout())
 
 
 def emit_speak(text: str, target: Optional[str] = None, mood: str = "talk", audio_url: Optional[str] = None):
@@ -758,6 +783,7 @@ async def lifespan(app: FastAPI):
             get_internal_track=lambda: state.get("current_track"),
             library_db=DB_PATH,
         )
+        nowplaying_svc.on_track_change(publish_nowplaying)
         nowplaying_task = asyncio.create_task(nowplaying_svc.run_poll_loop())
     except Exception:
         logger.exception("nowplaying service failed to start")
@@ -1474,6 +1500,83 @@ def next_show_payload(cfg: Optional[dict] = None, *, now: Optional[datetime] = N
 @app.get("/shows/next")
 def shows_next():
     return next_show_payload()
+
+
+# --- Now Playing API (V2) -------------------------------------------------
+# Dual paths: /api/* for visualizer + built booth; bare /* for Vite dev proxy
+# (frontend-dashboard strips /api) and the old bridge alias GET /nowplaying.
+
+
+def _nowplaying_state() -> dict:
+    if not nowplaying_svc:
+        return {}
+    return nowplaying_svc.state() or {}
+
+
+@app.get("/api/nowplaying")
+@app.get("/nowplaying")
+def get_nowplaying():
+    """Public current track JSON (compatible with visualizer js/nowplaying.js norm())."""
+    return _nowplaying_state()
+
+
+@app.post("/api/nowplaying")
+@app.post("/nowplaying")
+def post_nowplaying(body: dict, _auth: None = Depends(require_operator)):
+    """Operator manual set — commits immediately and broadcasts."""
+    if not nowplaying_svc:
+        raise HTTPException(status_code=503, detail="nowplaying unavailable")
+    track = nowplaying_svc.apply_manual_now(body or {})
+    if not track:
+        raise HTTPException(status_code=400, detail="invalid track payload")
+    return track
+
+
+@app.delete("/api/nowplaying")
+@app.delete("/nowplaying")
+def delete_nowplaying(_auth: None = Depends(require_operator)):
+    """Operator clear of manual override (and current if it was manual)."""
+    if not nowplaying_svc:
+        raise HTTPException(status_code=503, detail="nowplaying unavailable")
+    nowplaying_svc.clear_manual(clear_current=True)
+    return _nowplaying_state()
+
+
+@app.get("/api/nowplaying/stream")
+@app.get("/nowplaying/stream")
+async def nowplaying_stream():
+    """SSE: track_change events + heartbeat every 15s."""
+    queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+    _nowplaying_sse_queues.append(queue)
+
+    async def event_gen():
+        try:
+            # snapshot so clients don't wait for the next change
+            cur = _nowplaying_state()
+            yield f"event: track_change\ndata: {json.dumps(cur)}\n\n"
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    ev = item.get("event") or "track_change"
+                    data = item.get("data") if "data" in item else item
+                    yield f"event: {ev}\ndata: {json.dumps(data)}\n\n"
+                except asyncio.TimeoutError:
+                    yield "event: heartbeat\ndata: {}\n\n"
+        finally:
+            try:
+                _nowplaying_sse_queues.remove(queue)
+            except ValueError:
+                pass
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/healthz")

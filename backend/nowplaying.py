@@ -285,8 +285,30 @@ class NowPlaying:
         self._manual = n
         return n
 
-    def clear_manual(self) -> None:
+    def apply_manual_now(self, raw: Any) -> Optional[TrackDict]:
+        """Operator set: normalize, store as manual, commit immediately (no debounce)."""
+        n = self.set_manual(raw)
+        if not n:
+            return None
+        self._commit(n, self._clock())
+        return dict(n)
+
+    def clear_manual(self, *, clear_current: bool = True) -> Optional[TrackDict]:
+        """Clear manual override. If current was manual, drop it and notify listeners with {}."""
+        prev = dict(self._current) if self._current else None
         self._manual = None
+        if clear_current and self._current and self._current.get("source") == "manual":
+            self._current = None
+            self._pending = None
+            self._pending_since = None
+            empty: TrackDict = {}
+            for fn in list(self._listeners):
+                try:
+                    fn(empty)
+                except Exception:
+                    logger.exception("nowplaying track_change listener failed")
+            return prev
+        return None
 
     # --- sources --------------------------------------------------------
 
