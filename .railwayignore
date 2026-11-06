@@ -1,0 +1,15 @@
+.venv
+**/node_modules
+**/dist
+.git
+.agents
+__pycache__
+*.pyc
+backend/*.db
+backend/*.jsonl
+backend/backups
+frontend-dashboard/node_modules
+backend/frontend-overlay/node_modules
+Halo.app
+*.app
+.worktrees
