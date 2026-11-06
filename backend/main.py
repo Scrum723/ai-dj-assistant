@@ -49,6 +49,7 @@ from selector import pick as selector_pick
 from selector import plan_names as selector_plan_names
 from sentinel import is_killed
 from sentinel import router as sentinel_router
+from settings import _deep_merge
 from settings import load as load_settings
 from settings import public_settings, save as save_settings
 from trainer import idle_trainer
@@ -379,7 +380,8 @@ def emit_speak(text: str, target: Optional[str] = None, mood: str = "talk", audi
     state["speak_target"] = target
     state["speak_mood"] = mood
     state["speak_audio"] = audio_url
-    push_log(f"Halo: {text}")
+    cohost_name = (load_settings().get("halo") or {}).get("name") or "Chief"
+    push_log(f"{cohost_name}: {text}")
     publish_state()
     broadcast(
         {
@@ -936,7 +938,7 @@ def read_root():
     return {
         "status": "DJ Bot Botty is online.",
         "product": "DJ Bot Botty",
-        "cohost": (load_settings().get("halo") or {}).get("name") or "Halo",
+        "cohost": (load_settings().get("halo") or {}).get("name") or "Chief",
         "midi_connected": dj.connected,
         "dashboard": "http://127.0.0.1:5173",
         "overlay": "http://127.0.0.1:5174",
@@ -953,6 +955,11 @@ def get_settings_route():
 @app.post("/settings")
 def update_settings_route(patch: dict, _auth: None = Depends(require_operator)):
     current = load_settings()
+    # Alias: clients may send `chief`; fold into `halo` before secret handling/save.
+    chief_patch = patch.pop("chief", None) if isinstance(patch, dict) else None
+    if isinstance(chief_patch, dict):
+        existing = patch.get("halo") if isinstance(patch.get("halo"), dict) else {}
+        patch["halo"] = _deep_merge(chief_patch, existing)
     halo_patch = patch.get("halo") if isinstance(patch.get("halo"), dict) else None
     if halo_patch is not None:
         halo_patch.pop("elevenlabs_key_set", None)

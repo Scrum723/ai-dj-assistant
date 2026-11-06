@@ -14,16 +14,26 @@ APP_DIR = Path.home() / "Library" / "Application Support" / "HaloDJ"
 SETTINGS_PATH = APP_DIR / "settings.json"
 VOICE_DIR = APP_DIR / "voice"
 
+# Pre-rename default persona — used only for one-time migration matching.
+OLD_DEFAULT_PERSONA = (
+    "You are Halo, the LLM DJ buddy inside DJ Bot Botty "
+    "(Charles Clottin / A Geostrophic Flow). Socialize with chat: greet by name, "
+    "hype the music, take requests, answer short questions, introduce fans. "
+    "1-2 spoken sentences. No hashtags, URLs, or 'as an AI'."
+)
+
+DEFAULT_PERSONA = (
+    "You are Chief, the LLM DJ buddy inside DJ Bot Botty "
+    "(Charles Clottin / A Geostrophic Flow). Socialize with chat: greet by name, "
+    "hype the music, take requests, answer short questions, introduce fans. "
+    "1-2 spoken sentences. No hashtags, URLs, or 'as an AI'."
+)
+
 DEFAULTS = {
     "halo": {
-        "name": "Halo",
+        "name": "Chief",
         "persona_preset": "hype",
-        "persona": (
-            "You are Halo, the LLM DJ buddy inside DJ Bot Botty "
-            "(Charles Clottin / A Geostrophic Flow). Socialize with chat: greet by name, "
-            "hype the music, take requests, answer short questions, introduce fans. "
-            "1-2 spoken sentences. No hashtags, URLs, or 'as an AI'."
-        ),
+        "persona": DEFAULT_PERSONA,
         "voice_provider": "macos",
         "voice_id": "Samantha",
         "elevenlabs_key": "",
@@ -200,23 +210,53 @@ def ensure_dirs():
     VOICE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _migrate_halo_to_chief(data: dict) -> bool:
+    """One-time Halo→Chief default rename. Never overwrites custom name/persona."""
+    meta = data.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+        data["meta"] = meta
+    if meta.get("renamed_chief"):
+        return False
+    halo = data.get("halo")
+    if not isinstance(halo, dict):
+        halo = {}
+        data["halo"] = halo
+    if halo.get("name") == "Halo":
+        halo["name"] = "Chief"
+    if halo.get("persona") == OLD_DEFAULT_PERSONA:
+        halo["persona"] = DEFAULT_PERSONA
+    meta["renamed_chief"] = True
+    return True  # marker always written once
+
+
 def load() -> dict:
     ensure_dirs()
     with LOCK:
         if not SETTINGS_PATH.exists():
             data = copy.deepcopy(DEFAULTS)
+            data.setdefault("meta", {})["renamed_chief"] = True
             SETTINGS_PATH.write_text(json.dumps(data, indent=2))
             return data
         try:
             raw = json.loads(SETTINGS_PATH.read_text())
         except Exception:
             raw = {}
-        return _deep_merge(DEFAULTS, raw)
+        data = _deep_merge(DEFAULTS, raw)
+        if _migrate_halo_to_chief(data):
+            SETTINGS_PATH.write_text(json.dumps(data, indent=2))
+        return data
 
 
 def save(patch: dict) -> dict:
     current = load()
-    merged = _deep_merge(current, patch or {})
+    # API alias: clients may PATCH `chief`; persist under `halo`.
+    patch = dict(patch or {})
+    chief_patch = patch.pop("chief", None)
+    if isinstance(chief_patch, dict):
+        halo_patch = patch.get("halo") if isinstance(patch.get("halo"), dict) else {}
+        patch["halo"] = _deep_merge(chief_patch, halo_patch)
+    merged = _deep_merge(current, patch)
     env_key = os.getenv("ELEVENLABS_API_KEY")
     if env_key and not merged["halo"].get("elevenlabs_key"):
         merged["halo"]["elevenlabs_key"] = env_key
@@ -252,4 +292,6 @@ def public_settings(data: dict | None = None) -> dict:
                     present = bool(acfg.get(sk))
                     acfg[f"{sk}_set"] = present
                     acfg[sk] = ""
+    # Alias for clients migrating off the `halo` settings key.
+    data["chief"] = copy.deepcopy(data.get("halo") or {})
     return data

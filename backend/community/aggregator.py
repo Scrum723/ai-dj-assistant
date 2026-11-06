@@ -512,10 +512,12 @@ class Aggregator:
 
         return True
 
-    def publish_halo(self, text: str, *, name: str = "Halo") -> bool:
-        """Publish a Halo line into the merged room (platform=halo)."""
+    def publish_halo(self, text: str, *, name: Optional[str] = None) -> bool:
+        """Publish a Halo/Chief line into the merged room (platform=halo)."""
+        if not name:
+            name = (self._get_settings().get("halo") or {}).get("name") or "Chief"
         ts = time.time()
-        handle = (name or "Halo").strip()[:40] or "Halo"
+        handle = (name or "Chief").strip()[:40] or "Chief"
         msg = ChatMessage(
             id=f"halo:{handle}:{ts}",
             platform="halo",
