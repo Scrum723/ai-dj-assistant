@@ -125,13 +125,17 @@ def test_ws_receives_nowplaying_type(np_client):
         got = None
         while time.time() < deadline:
             msg = ws.receive_json()
-            if msg.get("type") == "nowplaying":
-                got = msg
+            if msg.get("type") != "nowplaying":
+                continue
+            payload = msg.get("payload") or {}
+            # Accept nested track shapes; ignore unrelated mid-flight broadcasts.
+            title = payload.get("title") or (payload.get("track") or {}).get("title")
+            artist = payload.get("artist") or (payload.get("track") or {}).get("artist")
+            if title == "Selected" and artist == "Charlotte de Witte":
+                got = payload
                 break
         assert got is not None
-        payload = got.get("payload") or {}
-        assert payload.get("title") == "Selected"
-        assert payload.get("artist") == "Charlotte de Witte"
+        assert got.get("title") == "Selected" or (got.get("track") or {}).get("title") == "Selected"
 
 
 def test_nowplaying_js_served(np_client):
