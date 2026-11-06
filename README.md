@@ -107,7 +107,7 @@ Chief starts with the app. The overlay is their face: they greet people, answer 
    - **YouTube live chat** — paste a live video ID when you are actually streaming
 3. Turn demo OFF once real chat is connected.
 
-`GEMINI_API_KEY` in `~/.env` makes replies generative. Without it, Chief still talks using local lines.
+`GEMINI_API_KEY` in `~/.env` makes replies generative. Without it, Chief still talks using local lines. Full notes: [`docs/gemini-setup.md`](docs/gemini-setup.md) (model `gemini-3.6-flash`, thinking-token floor, Windows booth check).
 
 ### Chief LLM / memory env vars
 
@@ -117,7 +117,8 @@ Chief starts with the app. The overlay is their face: they greet people, answer 
 |-----|---------|---------|
 | `CHIEF_PROVIDER` | `gemini` | LLM backend: `gemini` or `xai` (alias `grok`) (legacy `HALO_PROVIDER` still accepted) |
 | `GEMINI_API_KEY` | — | Required when `CHIEF_PROVIDER=gemini` for generative replies |
-| `GEMINI_MODEL` | `gemini-3.6-flash` | Gemini model id |
+| `GEMINI_MODEL` | `gemini-3.6-flash` | Gemini model id (3.x needs adequate output token budget — see gemini-setup.md) |
+| `GOOGLE_CLOUD_PROJECT` | — | Optional project id/number; not a substitute for `GEMINI_API_KEY` or OAuth Client ID |
 | `XAI_API_KEY` | — | Required when `CHIEF_PROVIDER=xai` |
 | `XAI_MODEL` | `grok-2-latest` | xAI model id |
 | `CHIEF_COST_PER_1K` | `0.0001` | Estimated USD per 1k tokens for `/metrics` (legacy `HALO_COST_PER_1K` still accepted) |

@@ -123,9 +123,8 @@ Manual on Charles's Mac: still open (see Blocked on Charles).
 - [ ] `python3 start.py` / `./make_app.sh` → Chief.app on Mac
 
 ### Notes / deviations
-- Started from origin/main @ c902a73 on branch feature/chief-visualizer
-- Ruling: work on feature/chief-visualizer off origin/main (not alpha/a1-d1) — plan checked against main
+- Started from origin/main @ c902a73 on branch feature/chief-visualizer; **merged to main** (PRs #2–#5)
 - V0: used Downloads visualizer-v2 (no v3 on disk); V2 added minimal js/nowplaying.js (SSE + poll)
 - R3: Halo relay format became Name: text — kept as intentional
 - R1: first implementer hung on full pytest; controller finished focused tests + commit
-- Branch left local only (no push/PR) per Charles
+- **Gemini (local Windows booth):** `CHIEF_PROVIDER=gemini`, `GEMINI_MODEL=gemini-3.6-flash`, key in `~/.env`; project `352688721186`. See `docs/gemini-setup.md`. Social OAuth keys still empty (email pass works).
