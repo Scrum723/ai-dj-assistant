@@ -192,6 +192,15 @@ DEFAULTS = {
             },
         },
     },
+    # Now Playing (V1): pluggable sources; env NOWPLAYING_* overrides at runtime
+    "nowplaying": {
+        "sources": ["internal", "wnp", "file"],
+        "wnp_url": "http://127.0.0.1:8899/v1/last",
+        "file": "",
+        "bridge_url": "",
+        "poll_sec": 2.0,
+        "debounce_sec": 3.0,
+    },
 }
 
 

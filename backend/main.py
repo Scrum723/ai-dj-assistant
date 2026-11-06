@@ -36,6 +36,7 @@ from community.schema import ChatMessage, ChatUser
 from community.store import CommunityStore, DEFAULT_RETENTION_DAYS
 from dj_controller import DJController, MIDI_MAP
 from mixer import Mixer
+from nowplaying import NowPlaying
 from ops import (
     allow_ip,
     check_adapter_down_alerts,
@@ -84,10 +85,12 @@ aggregator: Optional[Aggregator] = None
 community_store: Optional[CommunityStore] = None
 community_mod: Optional[CommunityMod] = None
 community_relay: Optional[CommunityRelay] = None
+nowplaying_svc = None  # set in lifespan (NowPlaying)
 speech_queue: asyncio.Queue
 agent_task: Optional[asyncio.Task] = None
 speech_task: Optional[asyncio.Task] = None
 presence_task: Optional[asyncio.Task] = None
+nowplaying_task: Optional[asyncio.Task] = None
 _main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 
@@ -515,7 +518,7 @@ async def presence_worker():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global agent, aggregator, community_store, community_mod, speech_queue, agent_task, speech_task, presence_task, _main_loop
+    global agent, aggregator, community_store, community_mod, speech_queue, agent_task, speech_task, presence_task, nowplaying_svc, nowplaying_task, _main_loop
     _main_loop = asyncio.get_running_loop()
     try:
         maybe_daily_backup()
@@ -748,6 +751,19 @@ async def lifespan(app: FastAPI):
     if tracks and not state["current_track"]:
         state["current_track"] = tracks[0]
 
+    # Now Playing poll loop (V1) — cloud-safe sources, never crash
+    try:
+        nowplaying_svc = NowPlaying.from_settings(
+            cfg,
+            get_internal_track=lambda: state.get("current_track"),
+            library_db=DB_PATH,
+        )
+        nowplaying_task = asyncio.create_task(nowplaying_svc.run_poll_loop())
+    except Exception:
+        logger.exception("nowplaying service failed to start")
+        nowplaying_svc = None
+        nowplaying_task = None
+
     # Optional MIDI input (Mac controller); no-op if port unset / mido missing
     midi_in = ((cfg.get("dj") or {}).get("midi_in_port") or os.getenv("DJ_MIDI_IN_PORT") or "").strip()
     if midi_in:
@@ -791,11 +807,24 @@ async def lifespan(app: FastAPI):
     yield
     trainer_stop.set()
     dj.stop_midi_input()
+    if nowplaying_svc:
+        try:
+            nowplaying_svc.stop()
+        except Exception:
+            pass
     if aggregator:
         aggregator.stop()
     if agent:
         agent.stop()
-    for task in (agent_task, speech_task, trainer_task, presence_task, watchdog_task, adapter_health_task):
+    for task in (
+        agent_task,
+        speech_task,
+        trainer_task,
+        presence_task,
+        watchdog_task,
+        adapter_health_task,
+        nowplaying_task,
+    ):
         if task:
             task.cancel()
 

@@ -138,6 +138,11 @@ Chief starts with the app. The overlay is their face: they greet people, answer 
 | `X_POST_ID` | unset | Optional root post id for X replies polling |
 | `RUMBLE_LIVESTREAM_API_URL` | unset | Rumble livestream API URL (embeds key) |
 | `FACEBOOK_PAGE_ACCESS_TOKEN` | unset | Facebook Page token for Live comments |
+| `NOWPLAYING_SOURCES` | `internal,wnp,file` | Comma-separated Now Playing sources tried in order (`internal`, `wnp`, `file`, `bridge`, `manual`) |
+| `NOWPLAYING_WNP_URL` | `http://127.0.0.1:8899/v1/last` | What's Now Playing `GET /v1/last` URL |
+| `NOWPLAYING_FILE` | unset | Path to text (`Artist - Title`) or JSON now-playing file |
+| `NOWPLAYING_BRIDGE_URL` | unset | External bridge `GET` URL (e.g. `http://127.0.0.1:8787/nowplaying`) |
+| `NOWPLAYING_POLL_SEC` | `2` | Now Playing poll interval seconds |
 
 ### Railway / djbotbotty.com
 

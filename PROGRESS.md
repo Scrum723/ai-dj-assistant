@@ -87,8 +87,8 @@ Concrete setup checklist (no credentials invented here — create these when rea
 - [x] R3 — relay names — 98a6c51
 - [x] R4 — envcompat — c24b13a
 - [x] R5 — Frontends, desktop app, docs
-- [ ] V0 — Vendor the visualizer
-- [ ] V1 — Now Playing service (core module)
+- [x] V0 — vendored visualizer-v2 — aac6f98 (no nowplaying.js in v2)
+- [x] V1 — Now Playing service (core module)
 - [ ] V2 — Now Playing endpoints + realtime
 - [ ] V3 — Chief track awareness
 - [ ] V4 — Visualizer remote control (websocket)
