@@ -2,7 +2,7 @@
 
 **Branch:** `feature/chief-visualizer` (worktree `C:\Users\cclot\ai-dj-assistant\.worktrees\chief-visualizer`)  
 **Base:** `origin/main` @ `c902a73`  
-**Status:** All phases R0–R5 and V0–V7 implemented and committed. **Not pushed** (local only).
+**Status:** All phases R0–R5 and V0–V7 implemented. Pushed to GitHub; PR to `main`.
 
 ## Phases done
 
@@ -30,7 +30,7 @@
   `test_r0_launcher`, `test_r1_rename_settings`, `test_r2_chief_brain`, `test_r3_relay_name`, `test_r4_envcompat`, `test_v1_nowplaying`, `test_v2_nowplaying_api`, `test_v3_chief_tracks`, `test_v4_vis_ws`, `test_v7_health`
 - **Frontend builds:** both `frontend-dashboard` and `backend/frontend-overlay` `npm run build` succeeded
 - **Smoke (TestClient, `PYTHONPATH=backend`):** `/visualizer/` 200, `/api/nowplaying` `{}`, `/healthz` 200 with `nowplaying` + `visualizer` fields
-- **Full** `pytest -q`: not claimed green on Windows (known hang risk: c1_midi, kill_auth, b3_identity, c3_selector)
+- **Full** `pytest -q` on Windows: **318 passed, 2 skipped** (after snapshot/status recursion fix)
 
 ## Blockers (Charles)
 
@@ -49,20 +49,21 @@
 - No visualizer-v3 on disk → vendored v2; added SSE+poll `js/nowplaying.js` in V2  
 - Internal keys/DBs stay `halo*`; user-facing name is Chief  
 - Halo relay message format `Name: text` kept after R3  
-- Branch remains local; no push/merge until asked
+- Windows PC install uses `DJ_BACKEND=sim` (MIDI stays on Mac)
 
-## How to run locally
+## How to run locally (Windows)
 
 ```text
-cd .worktrees/chief-visualizer
-$env:PYTHONPATH = "backend"   # Windows PowerShell
-python -m uvicorn main:app --app-dir backend --port 8000
-# then open http://127.0.0.1:8000/visualizer/
-# dashboard: http://127.0.0.1:8000/booth/  (after npm build)
+cd C:\Users\cclot\ai-dj-assistant\.worktrees\chief-visualizer
+pwsh -File .\Start-DJBotBotty.ps1
+# or: python start.py
 ```
 
-## Next steps (when Charles asks)
+URLs: booth `/booth/`, overlay `/overlay/`, visualizer `/visualizer/`
 
-1. Push `feature/chief-visualizer` and/or open PR to `main`  
+## Next steps
+
+1. Review and merge the GitHub PR  
 2. Mac dress rehearsal from section 6 manual checklist  
 3. Drop in v3 visualizer if provided  
+
