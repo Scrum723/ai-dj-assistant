@@ -21,6 +21,8 @@ Last updated: 2026-03-25 · Owner: Scrum723
 | https://github.com/blacktwist/social-media-skills | Creator social skills |
 | https://github.com/laaielichter/Ai-edit-studio | Edit / produce pipeline ideas |
 | https://github.com/adult-video/tram-app | TRAM — live-coding MIDI / typographic rhythm (booth ideas) |
+| https://github.com/iltempe/openband | Browser GarageBand-style DAW + MCP (AI can play the studio) |
+| https://github.com/YuriyGuts/midichlorian | MIDI instrument → IDE / automation mapping patterns |
 
 ## Keep — Grok bot architecture / staff
 
