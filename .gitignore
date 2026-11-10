@@ -23,3 +23,7 @@ voice_cache/
 
 identity.db
 backend/identity.db
+
+.worktrees/
+.superpowers/
+
