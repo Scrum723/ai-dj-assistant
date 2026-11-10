@@ -23,6 +23,14 @@ Last updated: 2026-03-25 · Owner: Scrum723
 | https://github.com/adult-video/tram-app | TRAM — live-coding MIDI / typographic rhythm (booth ideas) |
 | https://github.com/iltempe/openband | Browser GarageBand-style DAW + MCP (AI can play the studio) |
 | https://github.com/YuriyGuts/midichlorian | MIDI instrument → IDE / automation mapping patterns |
+| https://github.com/ldrolez/free-midi-chords | Free MIDI chord / progression packs for any DAW |
+| https://github.com/ahujasid/ableton-mcp | Ableton Live MCP — LLM control of tracks/clips (booth AI) |
+| https://github.com/fabox-os/Pro-Wave | Logic-style DAW in Rust (tracks, piano roll, mixer, synth) |
+| https://github.com/noahbaxter/chartchotic | AU/VST MIDI note visualizer (rhythm-game style) |
+| https://github.com/ItsAlphaNeon/Lemon-Studio | FOSS DAW with familiar workflow |
+| https://github.com/gantasmo/theDAW | Full DAW/DJ/VJ + AI (Ableton-interop); reference only — large |
+| https://github.com/Ardour/ardour | Ardour DAW source (mirror); reference only — large |
+| https://github.com/zrythm/zrythm | Zrythm DAW (mirror); reference only — large |
 
 ## Keep — Grok bot architecture / staff
 
@@ -65,6 +73,8 @@ Other (out of booth scope this week):
 - https://github.com/sansan0/TrendRadar
 - https://github.com/ben-mad-jlp/grok-game-mcp
 - https://github.com/Nitro70/ai-jarvis
+- https://github.com/shibco/ableton-linux — Linux Wine/Push path; booth is Mac/Windows
+- https://github.com/dawson-org/dawson-cli — AWS serverless Node framework (name only looks like a DAW)
 
 Duplicates in the original dump were collapsed above.
 
