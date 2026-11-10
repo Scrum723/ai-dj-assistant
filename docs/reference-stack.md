@@ -20,6 +20,7 @@ Last updated: 2026-03-25 · Owner: Scrum723
 | https://github.com/AdwaveInc/wavemaker-plugins | Wavemaker / audio plugins (MCP already in use) |
 | https://github.com/blacktwist/social-media-skills | Creator social skills |
 | https://github.com/laaielichter/Ai-edit-studio | Edit / produce pipeline ideas |
+| https://github.com/adult-video/tram-app | TRAM — live-coding MIDI / typographic rhythm (booth ideas) |
 
 ## Keep — Grok bot architecture / staff
 
